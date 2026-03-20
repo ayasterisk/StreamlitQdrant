@@ -79,8 +79,6 @@ with st.sidebar:
     top_k = st.slider("Số lượng tài liệu Hop-1:", 1, 10, 5)
     st.divider()
     st.info("Hệ thống thực hiện tìm kiếm đồng thời qua Vector ngữ nghĩa (Dense) và Từ khóa chính xác (Sparse/Splade).")
-
-# Ô nhập câu hỏi
 query = st.chat_input("Nhập câu hỏi so sánh hoặc bắc cầu (Ví dụ: Which magazine started first...)")
 
 if query:
