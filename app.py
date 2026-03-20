@@ -72,11 +72,11 @@ def advanced_retrieval(query_text, top_k=5):
     
     return final_evidence
 
-st.title("🚀 HotpotQA Advanced RAG System")
+st.title("HotpotQA Advanced RAG System")
 st.markdown("Hệ thống suy luận đa bước sử dụng **Hybrid Retrieval** và **DeepSeek V3**.")
 
 with st.sidebar:
-    st.header("⚙️ Cấu hình RAG")
+    st.header("Cấu hình RAG")
     top_k = st.slider("Số lượng tài liệu Hop-1:", 1, 10, 5)
     st.divider()
     st.info("Hệ thống thực hiện tìm kiếm đồng thời qua Vector ngữ nghĩa (Dense) và Từ khóa chính xác (Sparse/Splade).")
@@ -88,7 +88,7 @@ if query:
     with st.chat_message("user"):
         st.write(query)
 
-    with st.status("🔍 Đang truy vết bằng chứng đa bước...", expanded=True) as status:
+    with st.status("Đang truy vết bằng chứng đa bước...", expanded=True) as status:
         evidence = advanced_retrieval(query, top_k)
         
         context_items = []
@@ -101,7 +101,7 @@ if query:
         full_context = "\n\n".join(context_items)
         status.update(label="Đã thu thập đủ bằng chứng!", state="complete", expanded=False)
 
-    with st.chat_message("assistant", avatar="🤖"):
+    with st.chat_message("assistant"):
         with st.spinner("DeepSeek đang suy luận logic..."):
             prompt = f"""Bạn là Chuyên gia Suy luận Logic. Hãy trả lời CÂU HỎI dựa trên DANH SÁCH TÀI LIỆU dưới đây.
             
@@ -109,6 +109,8 @@ if query:
             1. TRÍCH DẪN: Luôn kèm số thứ tự tài liệu [1], [2] khi đưa ra thông tin.
             2. SO SÁNH: Nếu câu hỏi so sánh, hãy lập luận về từng đối tượng trước khi kết luận.
             3. TRUNG THỰC: Nếu không có thông tin trong tài liệu, hãy nói 'Tôi không biết'.
+            4. PHÂN BIỆT: Rõ ràng phân biệt giữa bằng chứng hỗ trợ (is_supporting=True) và ngữ cảnh liên quan nhưng không hỗ trợ trực tiếp (is_supporting=False).
+            5. KẾT LUẬN: Dựa trên bằng chứng, đưa ra câu trả lời cuối cùng cho câu hỏi một cách đơn giản và rõ ràng, không vòng vo.
 
             DANH SÁCH TÀI LIỆU:
             {full_context}
