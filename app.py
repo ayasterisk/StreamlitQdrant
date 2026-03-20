@@ -3,7 +3,7 @@ from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding, SparseTextEmbedding
 from openai import OpenAI
 
-st.set_page_config(page_title="HotpotQA Multi-hop RAG", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="HotpotQA Multi-hop RAG", layout="wide")
 
 @st.cache_resource
 def init_resources():
@@ -72,8 +72,7 @@ def advanced_retrieval(query_text, top_k=5):
     
     return final_evidence
 
-st.title("HotpotQA Advanced RAG System")
-st.markdown("Hệ thống suy luận đa bước sử dụng **Hybrid Retrieval** và **DeepSeek V3**.")
+st.title("HotpotQA RAG System")
 
 with st.sidebar:
     st.header("Cấu hình RAG")
@@ -108,9 +107,9 @@ if query:
             QUY TẮC:
             1. TRÍCH DẪN: Luôn kèm số thứ tự tài liệu [1], [2] khi đưa ra thông tin.
             2. SO SÁNH: Nếu câu hỏi so sánh, hãy lập luận về từng đối tượng trước khi kết luận.
-            3. TRUNG THỰC: Nếu không có thông tin trong tài liệu, hãy nói 'Tôi không biết'.
+            3. TRUNG THỰC: Nếu không có thông tin trong tài liệu, hãy nói 'Tôi không đủ khả năng để trả lời câu hỏi này'.
             4. PHÂN BIỆT: Rõ ràng phân biệt giữa bằng chứng hỗ trợ (is_supporting=True) và ngữ cảnh liên quan nhưng không hỗ trợ trực tiếp (is_supporting=False).
-            5. KẾT LUẬN: Dựa trên bằng chứng, đưa ra câu trả lời cuối cùng cho câu hỏi một cách đơn giản và rõ ràng, không vòng vo.
+            5. KẾT LUẬN: Đưa ra câu trả lời cuối cùng cho câu hỏi một cách đơn giản và rõ ràng, không vòng vo.
 
             DANH SÁCH TÀI LIỆU:
             {full_context}
