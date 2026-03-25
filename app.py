@@ -186,6 +186,7 @@ if query:
         st.json([
             {
                 "title": p.payload.get("title"),
+                "text": p.payload.get("text"),
                 "score": getattr(p, "score", None),
                 "is_supporting": p.payload.get("is_supporting")
             }
