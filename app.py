@@ -151,26 +151,23 @@ if query:
     with st.chat_message("assistant"):
         with st.spinner("🧠 DeepSeek đang suy luận..."):
             prompt = f"""
-Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
+                Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
 
-QUY TẮC:
-- Chỉ sử dụng thông tin từ tài liệu
-- Mỗi thông tin phải có citation [số]
-- Nếu thiếu thông tin → nói rõ không đủ dữ liệu
+                QUY TẮC: 
+                1. TRÍCH DẪN: Luôn kèm số thứ tự tài liệu [1], [2] khi đưa ra thông tin. 
+                2. SO SÁNH: Nếu câu hỏi so sánh, hãy lập luận về từng đối tượng trước khi kết luận. 
+                3. TRUNG THỰC: Nếu không có thông tin trong tài liệu, hãy nói 'Tôi không đủ khả năng để trả lời câu hỏi này'. 
+                4. CỐ GẮNG SỬ DỤNG TÀI LIỆU: Cố gắng phân tích và sử dụng thông tin từ tài liệu để trả lời, đừng chỉ dựa vào kiến thức chung.
+                5. KẾT LUẬN: Đưa ra câu trả lời cuối cùng cho câu hỏi một cách đơn giản và rõ ràng, không vòng vo.
 
-CÁCH TRẢ LỜI:
-1. Phân tích câu hỏi
-2. Đối chiếu tài liệu
-3. Kết luận ngắn gọn
+                TÀI LIỆU:
+                {full_context}
 
-TÀI LIỆU:
-{full_context}
+                CÂU HỎI:
+                {query}
 
-CÂU HỎI:
-{query}
-
-TRẢ LỜI:
-"""
+                TRẢ LỜI:
+                """
 
             try:
                 response = llm_client.chat.completions.create(
