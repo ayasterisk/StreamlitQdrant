@@ -2,10 +2,13 @@ import streamlit as st
 from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding, SparseTextEmbedding
 from openai import OpenAI
-import re
 
-st.set_page_config(page_title="HotpotQA Smart RAG", layout="wide")
+# ================== CONFIG ==================
+st.set_page_config(page_title="HotpotQA Smart RAG (Optimized)", layout="wide")
 
+COLLECTION_NAME = "hotpot_qa"
+
+# ================== INIT ==================
 @st.cache_resource
 def init_resources():
     QDRANT_URL = st.secrets["QDRANT_URL"]
@@ -15,46 +18,70 @@ def init_resources():
     client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
     dense_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
     sparse_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
-    llm_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-    
+
+    llm_client = OpenAI(
+        api_key=DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com"
+    )
+
     return client, dense_model, sparse_model, llm_client
 
+
 client, dense_model, sparse_model, llm_client = init_resources()
-COLLECTION_NAME = "hotpot_qa"
 
-# Early Stop Logic: Dựa trên Metadata và Keyword Coverage
+# ================== UTILS ==================
+def rerank(points):
+    return sorted(points, key=lambda x: x.score if x.score else 0, reverse=True)
+
+
 def early_stop(query, results):
-    if not results: return False, "No results"
+    if not results:
+        return False, "No results"
 
-    # 1. Metadata Logic: Nếu Top-2 đã là bằng chứng xác thực (is_supporting)
-    top2_sup = [p for p in results[:2] if p.payload.get('is_supporting') == True]
-    if len(top2_sup) >= 2:
-        return True, "Metadata: Đã đủ 2 bằng chứng trong Top-2."
+    supporting = [p for p in results if p.payload.get("is_supporting")]
 
-    # 2. Keyword Logic: Kiểm tra độ phủ từ khóa của câu hỏi trong Hop-1
-    stop_words = {'which', 'what', 'where', 'who', 'is', 'are', 'the', 'a', 'of', 'and', 'in', 'to'}
-    query_keywords = set(re.findall(r'\w+', query.lower())) - stop_words
-    context_blob = " ".join([p.payload.get('text', '').lower() for p in results])
-    
-    if query_keywords:
-        found_keywords = sum(1 for word in query_keywords if word in context_blob)
-        if (found_keywords / len(query_keywords)) >= 0.85:
-            return True, "Keyword: Độ phủ từ khóa cao (>85%)."
+    # Multi-hop evidence check
+    titles = {p.payload["title"] for p in supporting}
+    if len(supporting) >= 2 and len(titles) >= 2:
+        return True, "Metadata: đủ multi-hop evidence"
 
-    return False, "Multi-hop: Cần tìm thêm dữ liệu cầu nối."
+    # High confidence score
+    high_score = [p for p in results if p.score and p.score > 0.75]
+    if len(high_score) >= 2:
+        return True, "Score: độ tin cậy cao"
 
-# Main Retrieval Logic: Kết hợp Dense + Sparse + Multi-hop
+    return False, "Cần multi-hop"
+
+
+def expand_query(query, hop1_points):
+    titles = [p.payload["title"] for p in hop1_points]
+    snippets = [p.payload["text"][:100] for p in hop1_points[:3]]
+
+    expanded = query + " " + " ".join(titles) + " " + " ".join(snippets)
+    return expanded
+
+
+def build_context(evidence):
+    context_items = []
+    for i, p in enumerate(evidence):
+        context_items.append(
+            f"[{i+1}] ({p.payload['title']}) {p.payload['text']}"
+        )
+    return "\n".join(context_items)
+
+
+# ================== RETRIEVAL ==================
 def advanced_retrieval(query_text, top_k=5):
-    # Embedding
+    # ===== HOP-1 =====
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse_raw = list(sparse_model.embed([query_text]))[0]
+
     query_sparse = models.SparseVector(
         indices=query_sparse_raw.indices.tolist(),
         values=query_sparse_raw.values.tolist()
     )
 
-    # Hop-1: Hybrid Search
-    hop1_points = client.query_points(
+    hop1 = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
             models.Prefetch(query=query_dense, using="dense", limit=20),
@@ -64,69 +91,86 @@ def advanced_retrieval(query_text, top_k=5):
         limit=top_k
     ).points
 
-    # Kiểm tra Early Stop
-    should_stop, reason = early_stop(query_text, hop1_points)
+    hop1 = rerank(hop1)
+
+    # ===== EARLY STOP =====
+    should_stop, reason = early_stop(query_text, hop1)
     if should_stop:
-        return hop1_points, f"Early Stop ({reason})"
+        return hop1[:top_k], f"Early Stop ({reason})"
 
-    # Nếu không dừng -> Hop-2
-    final_evidence = list(hop1_points)
-    seen_ids = {p.id for p in final_evidence}
-    bridge_titles = {p.payload['title'] for p in hop1_points if p.payload.get('is_supporting')}
+    # ===== HOP-2 (QUERY EXPANSION) =====
+    expanded_query = expand_query(query_text, hop1)
 
-    if bridge_titles:
-        hop2_points = client.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(key="title", match=models.MatchAny(any=list(bridge_titles))),
-                    models.FieldCondition(key="is_supporting", match=models.MatchValue(value=True))
-                ]
-            ),
-            limit=10
-        )[0]
-        for p in hop2_points:
-            if p.id not in seen_ids:
-                final_evidence.append(p)
-                seen_ids.add(p.id)
-    
-    return final_evidence, "Full Multi-hop"
+    query_dense_2 = list(dense_model.embed([expanded_query]))[0].tolist()
+    query_sparse_raw_2 = list(sparse_model.embed([expanded_query]))[0]
 
-# Streamlit UI
-st.title("Multi-hop RAG Agent")
+    query_sparse_2 = models.SparseVector(
+        indices=query_sparse_raw_2.indices.tolist(),
+        values=query_sparse_raw_2.values.tolist()
+    )
+
+    hop2 = client.query_points(
+        collection_name=COLLECTION_NAME,
+        prefetch=[
+            models.Prefetch(query=query_dense_2, using="dense", limit=20),
+            models.Prefetch(query=query_sparse_2, using="sparse", limit=20),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=top_k
+    ).points
+
+    # ===== MERGE =====
+    all_points = {p.id: p for p in hop1}
+    for p in hop2:
+        all_points[p.id] = p
+
+    final_points = list(all_points.values())
+    final_points = rerank(final_points)
+
+    return final_points[:6], "Full Multi-hop (Expanded Query)"
+
+
+# ================== UI ==================
+st.title("🚀 Multi-hop RAG Agent (Optimized)")
 
 query = st.chat_input("Nhập câu hỏi...")
+
 if query:
     with st.chat_message("user"):
         st.write(query)
 
-    with st.status("Đang truy vết dữ liệu...", expanded=True) as status:
-        evidence, strategy = advanced_retrieval(query, top_k=5  )
-        st.write(f"Chiến lược: **{strategy}**")
-        
-        context_items = []
-        for i, p in enumerate(evidence):
-            context_items.append(f"--- TÀI LIỆU [{i+1}] ---\nNGUỒN: {p.payload['title']}\nNỘI DUNG: {p.payload['text']}")
-        
-        full_context = "\n\n".join(context_items)
-        status.update(label=f"Hoàn tất ({strategy})", state="complete")
+    with st.status("🔍 Đang truy vết dữ liệu...", expanded=True) as status:
+        evidence, strategy = advanced_retrieval(query)
+
+        st.write(f"**Chiến lược:** {strategy}")
+
+        full_context = build_context(evidence)
+
+        status.update(label="✅ Hoàn tất truy xuất", state="complete")
 
     with st.chat_message("assistant"):
-        with st.spinner("DeepSeek đang suy luận..."):
-            prompt = f"""Bạn là Chuyên gia Suy luận Logic. Hãy trả lời CÂU HỎI dựa trên DANH SÁCH TÀI LIỆU dưới đây.
-            
-            QUY TẮC:
-            1. TRÍCH DẪN: Luôn kèm số thứ tự tài liệu [1], [2] khi đưa ra thông tin.
-            2. SO SÁNH: Nếu câu hỏi so sánh, hãy lập luận về từng đối tượng trước khi kết luận.
-            3. TRUNG THỰC: Nếu không có thông tin trong tài liệu, hãy nói 'Tôi không đủ khả năng để trả lời câu hỏi này'.
-            4. KẾT LUẬN: Đưa ra câu trả lời cuối cùng cho câu hỏi một cách đơn giản và rõ ràng, không vòng vo.
+        with st.spinner("🧠 DeepSeek đang suy luận..."):
+            prompt = f"""
+Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
 
-            DANH SÁCH TÀI LIỆU:
-            {full_context}
+QUY TẮC:
+- Chỉ sử dụng thông tin từ tài liệu
+- Mỗi thông tin phải có citation [số]
+- Nếu thiếu thông tin → nói rõ không đủ dữ liệu
 
-            CÂU HỎI: {query}
-            
-            CÂU TRẢ LỜI (Trình bày logic Suy luận -> Đối chiếu -> Kết luận):"""
+CÁCH TRẢ LỜI:
+1. Phân tích câu hỏi
+2. Đối chiếu tài liệu
+3. Kết luận ngắn gọn
+
+TÀI LIỆU:
+{full_context}
+
+CÂU HỎI:
+{query}
+
+TRẢ LỜI:
+"""
 
             try:
                 response = llm_client.chat.completions.create(
@@ -134,10 +178,12 @@ if query:
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3
                 )
+
                 st.markdown(response.choices[0].message.content)
+
             except Exception as e:
                 st.error(f"Lỗi API: {e}")
 
-    # Hiển thị Metadata gốc để kiểm chứng
-    with st.expander("Xem chi tiết Metadata gốc"):
+    # ===== DEBUG METADATA =====
+    with st.expander("📊 Xem Metadata"):
         st.json([p.payload for p in evidence])
