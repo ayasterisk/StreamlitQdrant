@@ -3,12 +3,9 @@ from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding, SparseTextEmbedding
 from openai import OpenAI
 
-# ================== CONFIG ==================
-st.set_page_config(page_title="HotpotQA Smart RAG (Optimized)", layout="wide")
+st.set_page_config(page_title="HotpotQA Smart RAG", layout="wide")
 
-COLLECTION_NAME = "hotpot_qa"
-
-# ================== INIT ==================
+# ================= INIT =================
 @st.cache_resource
 def init_resources():
     QDRANT_URL = st.secrets["QDRANT_URL"]
@@ -18,61 +15,58 @@ def init_resources():
     client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
     dense_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
     sparse_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
-
-    llm_client = OpenAI(
-        api_key=DEEPSEEK_API_KEY,
-        base_url="https://api.deepseek.com"
-    )
+    llm_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
     return client, dense_model, sparse_model, llm_client
 
 
 client, dense_model, sparse_model, llm_client = init_resources()
+COLLECTION_NAME = "hotpot_qa"
 
-# ================== UTILS ==================
-def rerank(points):
-    return sorted(points, key=lambda x: x.score if x.score else 0, reverse=True)
-
-
+# Early stop logic
 def early_stop(query, results):
     if not results:
         return False, "No results"
 
-    supporting = [p for p in results if p.payload.get("is_supporting")]
+    # Sort lại cho chắc
+    results = sorted(results, key=lambda x: x.score or 0, reverse=True)
 
-    # Multi-hop evidence check
-    titles = {p.payload["title"] for p in supporting}
-    if len(supporting) >= 2 and len(titles) >= 2:
-        return True, "Metadata: đủ multi-hop evidence"
+    scores = [p.score for p in results if p.score is not None]
 
-    # High confidence score
-    high_score = [p for p in results if p.score and p.score > 0.75]
-    if len(high_score) >= 2:
-        return True, "Score: độ tin cậy cao"
+    if len(scores) < 2:
+        return True, "Chỉ có 1 tài liệu → đủ dùng"
 
-    return False, "Cần multi-hop"
+    top1 = scores[0]
+    top2 = scores[1]
+    gap = top1 - top2
 
+    # Diversity check
+    titles = [p.payload.get("title", "") for p in results[:3]]
+    unique_titles = len(set(titles))
 
-def expand_query(query, hop1_points):
-    titles = [p.payload["title"] for p in hop1_points]
-    snippets = [p.payload["text"][:100] for p in hop1_points[:3]]
+    # Debug log
+    print(f"[DEBUG] top1={top1:.3f}, top2={top2:.3f}, gap={gap:.3f}, titles={unique_titles}")
 
-    expanded = query + " " + " ".join(titles) + " " + " ".join(snippets)
-    return expanded
+    # Condition 1: top-1 score rất cao
+    if top1 > 0.85:
+        return True, "Top-1 score rất cao"
 
+    # Condition 2: gap lớn giữa top-1 và top-2
+    if gap > 0.2:
+        return True, "Score gap lớn → top1 đủ mạnh"
 
-def build_context(evidence):
-    context_items = []
-    for i, p in enumerate(evidence):
-        context_items.append(
-            f"[{i+1}] ({p.payload['title']}) {p.payload['text']}"
-        )
-    return "\n".join(context_items)
+    # Condition 3: nếu top-1 khá cao và không có sự đa dạng (có thể chỉ là 1 tài liệu)
+    if unique_titles == 1 and top1 > 0.75:
+        return True, "Single document đủ mạnh"
 
+    # Condition 4: nếu có nhiều tài liệu nhưng điểm số rất thấp → có thể không đủ dữ kiện
+    if unique_titles >= 2:
+        return False, "Nhiều nguồn → cần multi-hop"
 
-# ================== RETRIEVAL ==================
+    return False, "Không đủ chắc chắn"
+
 def advanced_retrieval(query_text, top_k=5):
-    # ===== HOP-1 =====
+    # Embed query
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse_raw = list(sparse_model.embed([query_text]))[0]
 
@@ -81,7 +75,8 @@ def advanced_retrieval(query_text, top_k=5):
         values=query_sparse_raw.values.tolist()
     )
 
-    hop1 = client.query_points(
+    # Hop-1: Fusion RRF
+    hop1_points = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
             models.Prefetch(query=query_dense, using="dense", limit=20),
@@ -90,48 +85,56 @@ def advanced_retrieval(query_text, top_k=5):
         query=models.FusionQuery(fusion=models.Fusion.RRF),
         limit=top_k
     ).points
+    hop1_points = sorted(hop1_points, key=lambda x: x.score or 0, reverse=True)
 
-    hop1 = rerank(hop1)
+    # Early stop check
+    should_stop, reason = early_stop(query_text, hop1_points)
 
-    # ===== EARLY STOP =====
-    should_stop, reason = early_stop(query_text, hop1)
+    # Chỉ có 1 tài liệu → không cần hop-2
+    if len(hop1_points) <= 1:
+        return hop1_points, "Early Stop (Chỉ 1 tài liệu)"
+
     if should_stop:
-        return hop1[:top_k], f"Early Stop ({reason})"
+        return hop1_points, f"Early Stop ({reason})"
 
-    # ===== HOP-2 (QUERY EXPANSION) =====
-    expanded_query = expand_query(query_text, hop1)
+    # Hop-2: Tìm kiếm tài liệu hỗ trợ dựa trên metadata "is_supporting" và "title"
+    final_evidence = list(hop1_points)
+    seen_ids = {p.id for p in final_evidence}
 
-    query_dense_2 = list(dense_model.embed([expanded_query]))[0].tolist()
-    query_sparse_raw_2 = list(sparse_model.embed([expanded_query]))[0]
+    bridge_titles = {
+        p.payload["title"]
+        for p in hop1_points
+        if p.payload.get("is_supporting")
+    }
 
-    query_sparse_2 = models.SparseVector(
-        indices=query_sparse_raw_2.indices.tolist(),
-        values=query_sparse_raw_2.values.tolist()
-    )
+    if bridge_titles:
+        hop2_points = client.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="title",
+                        match=models.MatchAny(any=list(bridge_titles))
+                    ),
+                    models.FieldCondition(
+                        key="is_supporting",
+                        match=models.MatchValue(value=True)
+                    )
+                ]
+            ),
+            limit=10
+        )[0]
 
-    hop2 = client.query_points(
-        collection_name=COLLECTION_NAME,
-        prefetch=[
-            models.Prefetch(query=query_dense_2, using="dense", limit=20),
-            models.Prefetch(query=query_sparse_2, using="sparse", limit=20),
-        ],
-        query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=top_k
-    ).points
+        for p in hop2_points:
+            if p.id not in seen_ids:
+                final_evidence.append(p)
+                seen_ids.add(p.id)
 
-    # ===== MERGE =====
-    all_points = {p.id: p for p in hop1}
-    for p in hop2:
-        all_points[p.id] = p
-
-    final_points = list(all_points.values())
-    final_points = rerank(final_points)
-
-    return final_points[:6], "Full Multi-hop (Expanded Query)"
+    return final_evidence, "Full Multi-hop"
 
 
-# ================== UI ==================
-st.title("🚀 Multi-hop RAG Agent (Optimized)")
+# Streamlit UI
+st.title("Multi-hop RAG Agent")
 
 query = st.chat_input("Nhập câu hỏi...")
 
@@ -139,19 +142,25 @@ if query:
     with st.chat_message("user"):
         st.write(query)
 
-    with st.status("🔍 Đang truy vết dữ liệu...", expanded=True) as status:
-        evidence, strategy = advanced_retrieval(query)
+    with st.status("Đang truy vết dữ liệu...", expanded=True) as status:
+        evidence, strategy = advanced_retrieval(query, top_k=5)
 
-        st.write(f"**Chiến lược:** {strategy}")
+        st.write(f"Chiến lược: **{strategy}**")
 
-        full_context = build_context(evidence)
+        context_items = []
+        for i, p in enumerate(evidence):
+            context_items.append(
+                f"--- TÀI LIỆU [{i+1}] ---\n"
+                f"NGUỒN: {p.payload['title']}\n"
+                f"NỘI DUNG: {p.payload['text']}"
+            )
 
-        status.update(label="✅ Hoàn tất truy xuất", state="complete")
+        full_context = "\n\n".join(context_items)
+        status.update(label=f"Hoàn tất ({strategy})", state="complete")
 
     with st.chat_message("assistant"):
-        with st.spinner("🧠 DeepSeek đang suy luận..."):
-            prompt = f"""
-                Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
+        with st.spinner("DeepSeek đang suy luận..."):
+            prompt = f"""Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
 
                 QUY TẮC: 
                 1. TRÍCH DẪN: Luôn kèm số thứ tự tài liệu [1], [2] khi đưa ra thông tin. 
@@ -175,12 +184,17 @@ if query:
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3
                 )
-
                 st.markdown(response.choices[0].message.content)
-
             except Exception as e:
                 st.error(f"Lỗi API: {e}")
 
-    # ===== DEBUG METADATA =====
-    with st.expander("📊 Xem Metadata"):
-        st.json([p.payload for p in evidence])
+    # Debug: show raw metadata
+    with st.expander("Xem Metadata gốc"):
+        st.json([
+            {
+                "title": p.payload.get("title"),
+                "score": p.score,
+                "is_supporting": p.payload.get("is_supporting")
+            }
+            for p in evidence
+        ])
