@@ -26,6 +26,25 @@ def init_resources():
 client, dense_model, sparse_model, llm_client = init_resources()
 COLLECTION_NAME = "hotpot_qa"
 
+def rewrite_query(user_query):
+    if not st.session_state.messages:
+        return user_query
+    
+    # Lấy 3 câu thoại gần nhất làm ngữ cảnh để nén câu hỏi
+    history_text = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-3:]])
+    
+    rewrite_prompt = f"""Dựa vào lịch sử chat, hãy viết lại câu hỏi cuối cùng thành một câu truy vấn độc lập để tìm kiếm tài liệu.
+    LỊCH SỬ:
+    {history_text}
+    CÂU HỎI MỚI: {user_query}
+    CÂU TRUY VẤN ĐỘC LẬP:"""
+    
+    response = llm_client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": rewrite_prompt}],
+        temperature=0
+    )
+    return response.choices[0].message.content
 # Early stop logic dựa trên score và metadata
 def early_stop(results):
     if not results:
@@ -134,6 +153,9 @@ def advanced_retrieval(query_text, top_k=5):
 
 # Streamlit UI
 st.title("Multi-hop RAG Agent")
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
 
 query = st.chat_input("Nhập câu hỏi...")
 
@@ -142,7 +164,10 @@ if query:
         st.write(query)
 
     with st.status("Đang truy vết dữ liệu...", expanded=True):
-        evidence, strategy = advanced_retrieval(query)
+        search_query = rewrite_query(query) if st.session_state.messages else query
+        if search_query != query:
+            st.write(f"Tìm kiếm theo ngữ cảnh: *{search_query}*")
+        evidence, strategy = advanced_retrieval(search_query)
 
         st.write(f"Chiến lược: **{strategy}**")
 
@@ -153,6 +178,9 @@ if query:
 
     with st.chat_message("assistant"):
         with st.spinner("Đang suy luận..."):
+            # Lấy lịch sử để đưa vào Prompt trả lời
+            history_str = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-3:]])
+            
             prompt = f"""Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
 
                 QUY TẮC: 
@@ -161,6 +189,9 @@ if query:
                 3. TRUNG THỰC: Nếu không có thông tin trong tài liệu, hãy nói 'Tôi không đủ khả năng để trả lời câu hỏi này'. 
                 4. CỐ GẮNG SỬ DỤNG TÀI LIỆU: Cố gắng phân tích và sử dụng thông tin từ tài liệu để trả lời, đừng chỉ dựa vào kiến thức chung.
                 5. KẾT LUẬN: Đưa ra câu trả lời cuối cùng cho câu hỏi một cách đơn giản và rõ ràng, không vòng vo.
+
+                LỊCH SỬ HỘI THOẠI GẦN ĐÂY:
+                {history_str}
 
                 TÀI LIỆU:
                 {context}
@@ -177,12 +208,16 @@ if query:
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3
                 )
-                st.markdown(response.choices[0].message.content)
+                answer = response.choices[0].message.content
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "user", "content": query})
+                st.session_state.messages.append({"role": "assistant", "content": answer})
             except Exception as e:
                 st.error(f"Lỗi API: {e}")
 
     # Debug: Hiển thị metadata của các tài liệu được truy vết
     with st.expander("Debug Metadata"):
+        st.write(f"Search Query used: {search_query}")
         st.json([
             {
                 "title": p.payload.get("title"),
