@@ -26,6 +26,9 @@ def init_resources():
 client, dense_model, sparse_model, llm_client = init_resources()
 COLLECTION_NAME = "hotpot_qa"
 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
 def rewrite_query(user_query):
     if not st.session_state.messages:
         return user_query
@@ -33,12 +36,7 @@ def rewrite_query(user_query):
     # Lấy 3 câu thoại gần nhất làm ngữ cảnh để nén câu hỏi
     history_text = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-3:]])
     
-    rewrite_prompt = f"""Dựa vào lịch sử chat, hãy viết lại câu hỏi cuối cùng thành một câu truy vấn độc lập để tìm kiếm tài liệu.
-    LỊCH SỬ:
-    {history_text}
-    CÂU HỎI MỚI: {user_query}
-    CÂU TRUY VẤN ĐỘC LẬP:"""
-    
+    rewrite_prompt = f"Dựa vào lịch sử chat:\n{history_text}\n\nHãy viết lại câu hỏi sau thành một câu truy vấn độc lập để tìm kiếm: {user_query}\nCÂU TRUY VẤN ĐỘC LẬP:"
     response = llm_client.chat.completions.create(
         model="deepseek-chat",
         messages=[{"role": "user", "content": rewrite_prompt}],
@@ -153,9 +151,9 @@ def advanced_retrieval(query_text, top_k=5):
 
 # Streamlit UI
 st.title("Multi-hop RAG Agent")
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
 query = st.chat_input("Nhập câu hỏi...")
 
@@ -164,9 +162,7 @@ if query:
         st.write(query)
 
     with st.status("Đang truy vết dữ liệu...", expanded=True):
-        search_query = rewrite_query(query) if st.session_state.messages else query
-        if search_query != query:
-            st.write(f"Tìm kiếm theo ngữ cảnh: *{search_query}*")
+        search_query = rewrite_query(query)
         evidence, strategy = advanced_retrieval(search_query)
 
         st.write(f"Chiến lược: **{strategy}**")
