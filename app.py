@@ -5,6 +5,15 @@ from openai import OpenAI
 
 st.set_page_config(page_title="HotpotQA Smart RAG", layout="wide")
 
+# =========================
+# SESSION MEMORY
+# =========================
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# =========================
+# INIT
+# =========================
 @st.cache_resource
 def init_resources():
     client = QdrantClient(
@@ -26,7 +35,9 @@ def init_resources():
 client, dense_model, sparse_model, llm_client = init_resources()
 COLLECTION_NAME = "hotpot_qa"
 
-# Early stop logic dựa trên score và metadata
+# =========================
+# EARLY STOP
+# =========================
 def early_stop(results):
     if not results:
         return False, "No results"
@@ -42,7 +53,6 @@ def early_stop(results):
     titles = [p.payload.get("title", "") for p in results[:3]]
     unique_titles = len(set(titles))
 
-    # Debug: In ra các giá trị để hiểu rõ hơn
     print(f"[DEBUG] top1={top1:.3f}, top2={top2:.3f}, gap={gap:.3f}, titles={unique_titles}")
 
     if top1 > 0.85:
@@ -56,11 +66,45 @@ def early_stop(results):
 
     return False, "Cần multi-hop"
 
+# =========================
+# QUERY REWRITE
+# =========================
+def rewrite_query_with_history(query, history):
+    if len(history) < 2:
+        return query
 
-# Main retrieval function với logic multi-hop và early stop
+    history_text = "\n".join([
+        f"{m['role']}: {m['content']}"
+        for m in history[-4:]
+    ])
+
+    prompt = f"""
+Rewrite the question to be self-contained.
+
+Chat history:
+{history_text}
+
+Question:
+{query}
+
+Rewritten question:
+"""
+
+    try:
+        response = llm_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        return response.choices[0].message.content.strip()
+    except:
+        return query
+
+# =========================
+# RETRIEVAL
+# =========================
 def advanced_retrieval(query_text, top_k=5):
 
-    # Embed query cho cả dense và sparse
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse_raw = list(sparse_model.embed([query_text]))[0]
 
@@ -69,7 +113,6 @@ def advanced_retrieval(query_text, top_k=5):
         values=query_sparse_raw.values.tolist()
     )
 
-    # HOP-1: Truy vấn kết hợp dense + sparse với Fusion RRF
     hop1_points = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
@@ -80,14 +123,12 @@ def advanced_retrieval(query_text, top_k=5):
         limit=top_k
     ).points
 
-    # Sort hop1 results by score (nếu có) để dễ dàng áp dụng early stop
     hop1_points = sorted(
         hop1_points,
         key=lambda x: getattr(x, "score", 0),
         reverse=True
     )
 
-    #Early stop sau HOP-1 nếu thấy đủ tự tin
     if len(hop1_points) <= 1:
         return hop1_points, "Early Stop (1 tài liệu)"
 
@@ -96,7 +137,7 @@ def advanced_retrieval(query_text, top_k=5):
     if should_stop:
         return hop1_points, f"Early Stop ({reason})"
 
-    # HOP-2: Nếu cần multi-hop, truy vấn tiếp với filter dựa trên metadata "is_supporting"
+    # HOP-2
     final_evidence = list(hop1_points)
     seen_ids = {p.id for p in final_evidence}
 
@@ -131,18 +172,35 @@ def advanced_retrieval(query_text, top_k=5):
 
     return final_evidence, "Full Multi-hop"
 
+# =========================
+# UI
+# =========================
+st.title("Multi-hop RAG Agent (Conversational)")
 
-# Streamlit UI
-st.title("Multi-hop RAG Agent")
+# Hiển thị history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 query = st.chat_input("Nhập câu hỏi...")
 
 if query:
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": query
+    })
+
     with st.chat_message("user"):
         st.write(query)
 
+    # 👉 rewrite query
+    rewritten_query = rewrite_query_with_history(
+        query, st.session_state.messages
+    )
+
     with st.status("Đang truy vết dữ liệu...", expanded=True):
-        evidence, strategy = advanced_retrieval(query)
+        evidence, strategy = advanced_retrieval(rewritten_query)
 
         st.write(f"Chiến lược: **{strategy}**")
 
@@ -153,6 +211,8 @@ if query:
 
     with st.chat_message("assistant"):
         with st.spinner("Đang suy luận..."):
+
+            # 🔥 GIỮ NGUYÊN PROMPT CỦA BẠN
             prompt = f"""Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
 
                 QUY TẮC: 
@@ -171,24 +231,46 @@ if query:
                 TRẢ LỜI:
                 """
 
+            # 👉 thêm memory cho LLM (không đổi prompt)
+            history_for_llm = [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.messages[-6:]
+            ]
+
+            history_for_llm.append({
+                "role": "user",
+                "content": prompt
+            })
+
             try:
                 response = llm_client.chat.completions.create(
                     model="deepseek-chat",
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=history_for_llm,
                     temperature=0.3
                 )
-                st.markdown(response.choices[0].message.content)
+
+                answer = response.choices[0].message.content
+                st.markdown(answer)
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": answer
+                })
+
             except Exception as e:
                 st.error(f"Lỗi API: {e}")
 
-    # Debug: Hiển thị metadata của các tài liệu được truy vết
     with st.expander("Debug Metadata"):
         st.json([
             {
                 "title": p.payload.get("title"),
-                "text": p.payload.get("text"),
                 "score": getattr(p, "score", None),
                 "is_supporting": p.payload.get("is_supporting")
             }
             for p in evidence
         ])
+
+# Reset
+if st.button("🗑️ Xóa lịch sử"):
+    st.session_state.messages = []
+    st.rerun()
