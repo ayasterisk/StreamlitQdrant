@@ -5,15 +5,10 @@ from openai import OpenAI
 
 st.set_page_config(page_title="HotpotQA Smart RAG", layout="wide")
 
-# =========================
-# SESSION MEMORY
-# =========================
+# Session memory
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# =========================
-# INIT
-# =========================
 @st.cache_resource
 def init_resources():
     client = QdrantClient(
@@ -35,9 +30,7 @@ def init_resources():
 client, dense_model, sparse_model, llm_client = init_resources()
 COLLECTION_NAME = "hotpot_qa"
 
-# =========================
-# EARLY STOP
-# =========================
+# Early stopping function
 def early_stop(results):
     if not results:
         return False, "No results"
@@ -66,9 +59,6 @@ def early_stop(results):
 
     return False, "Cần multi-hop"
 
-# =========================
-# QUERY REWRITE
-# =========================
 def rewrite_query_with_history(query, history):
     if len(history) < 2:
         return query
@@ -100,11 +90,10 @@ Rewritten question:
     except:
         return query
 
-# =========================
-# RETRIEVAL
-# =========================
+# Main retrieval function
 def advanced_retrieval(query_text, top_k=5):
-
+    
+    # Embed query
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse_raw = list(sparse_model.embed([query_text]))[0]
 
@@ -172,12 +161,10 @@ def advanced_retrieval(query_text, top_k=5):
 
     return final_evidence, "Full Multi-hop"
 
-# =========================
-# UI
-# =========================
+# Streamlit UI
 st.title("Multi-hop RAG Agent (Conversational)")
 
-# Hiển thị history
+# History display
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -194,7 +181,7 @@ if query:
     with st.chat_message("user"):
         st.write(query)
 
-    # 👉 rewrite query
+    # Rewrite query
     rewritten_query = rewrite_query_with_history(
         query, st.session_state.messages
     )
@@ -211,8 +198,6 @@ if query:
 
     with st.chat_message("assistant"):
         with st.spinner("Đang suy luận..."):
-
-            # 🔥 GIỮ NGUYÊN PROMPT CỦA BẠN
             prompt = f"""Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
 
                 QUY TẮC: 
@@ -231,7 +216,7 @@ if query:
                 TRẢ LỜI:
                 """
 
-            # 👉 thêm memory cho LLM (không đổi prompt)
+            # Add recent history to prompt
             history_for_llm = [
                 {"role": m["role"], "content": m["content"]}
                 for m in st.session_state.messages[-6:]
@@ -264,6 +249,7 @@ if query:
         st.json([
             {
                 "title": p.payload.get("title"),
+                "text": p.payload.get("text"),
                 "score": getattr(p, "score", None),
                 "is_supporting": p.payload.get("is_supporting")
             }
@@ -271,6 +257,6 @@ if query:
         ])
 
 # Reset
-if st.button("🗑️ Xóa lịch sử"):
+if st.button("Xóa lịch sử"):
     st.session_state.messages = []
     st.rerun()
