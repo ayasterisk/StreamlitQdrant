@@ -162,7 +162,7 @@ def advanced_retrieval(query_text, top_k=5):
     return final_evidence, "Full Multi-hop"
 
 # Streamlit UI
-st.title("Multi-hop RAG Agent (Conversational)")
+st.title("HotpotQA RAG Agent")
 
 # History display
 for msg in st.session_state.messages:
