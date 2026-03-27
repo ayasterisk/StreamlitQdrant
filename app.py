@@ -3,7 +3,7 @@ from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding, SparseTextEmbedding
 from openai import OpenAI
 
-st.set_page_config(page_title="HotpotQA Smart RAG", layout="wide")
+st.set_page_config(page_title="HotpotQA RAG Agent", layout="wide")
 
 # Session memory
 if "messages" not in st.session_state:
