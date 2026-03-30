@@ -1,9 +1,16 @@
+import os
+from langsmith import traceable, trace
 import streamlit as st
 from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding, SparseTextEmbedding
 from openai import OpenAI
 
 st.set_page_config(page_title="HotpotQA RAG Agent", layout="wide")
+
+# Environment variables for LangSmith tracing
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_API_KEY"] = st.secrets["LANGSMITH_API_KEY"]
+os.environ["LANGCHAIN_PROJECT"] = "hotpotqa-rag"
 
 # Session memory
 if "messages" not in st.session_state:
@@ -31,6 +38,7 @@ client, dense_model, sparse_model, llm_client = init_resources()
 COLLECTION_NAME = "hotpot_qa"
 
 # Early stopping function
+@traceable(name="Early Stop Decision")
 def early_stop(results):
     if not results:
         return False, "No results"
@@ -46,8 +54,6 @@ def early_stop(results):
     titles = [p.payload.get("title", "") for p in results[:3]]
     unique_titles = len(set(titles))
 
-    print(f"[DEBUG] top1={top1:.3f}, top2={top2:.3f}, gap={gap:.3f}, titles={unique_titles}")
-
     if top1 > 0.85:
         return True, "Top-1 score is very high"
 
@@ -59,6 +65,8 @@ def early_stop(results):
 
     return False, "Need multi-hop"
 
+# Query rewriting function
+@traceable(name="Rewrite Query with History")
 def rewrite_query_with_history(query, history):
     if len(history) < 2:
         return query
@@ -91,6 +99,7 @@ Rewritten question:
         return query
 
 # Main retrieval function
+@traceable(name="Hybrid Retrieval + Multi-hop")
 def advanced_retrieval(query_text, top_k=5):
     
     # Embed query
@@ -119,11 +128,13 @@ def advanced_retrieval(query_text, top_k=5):
     )
 
     if len(hop1_points) <= 1:
+        trace.log("Early Stop", "Only 1 document retrieved")
         return hop1_points, "Early Stop (1 document)"
 
     should_stop, reason = early_stop(hop1_points)
 
     if should_stop:
+        trace.log("Strategy", f"Early Stop: {reason}")
         return hop1_points, f"Early Stop ({reason})"
 
     # HOP-2
@@ -159,7 +170,43 @@ def advanced_retrieval(query_text, top_k=5):
                 final_evidence.append(p)
                 seen_ids.add(p.id)
 
+    trace.log({
+        "query": query_text,
+        "num_docs": len(final_evidence),
+        "titles": [p.payload.get("title") for p in final_evidence],
+        "scores": [getattr(p, "score", None) for p in final_evidence],
+        "is_supporting": [p.payload.get("is_supporting") for p in final_evidence]
+    })
+    
     return final_evidence, "Full Multi-hop"
+
+# Context building function
+@traceable(name="Build Context")
+def build_context(evidence):
+    return "\n\n".join([
+        f"[{i+1}] {p.payload.get('title')}\n{p.payload.get('text')}"
+        for i, p in enumerate(evidence)
+    ])
+
+# LLM reasoning function
+@traceable(name="LLM Reasoning")
+def generate_answer(llm_client, history_for_llm):
+    response = llm_client.chat.completions.create(
+        model="deepseek-chat",
+        messages=history_for_llm,
+        temperature=0.3
+    )
+    return response.choices[0].message.content
+
+# Full RAG pipeline function
+@traceable(name="Full RAG Pipeline")
+def rag_pipeline(query, history):
+    rewritten_query = rewrite_query_with_history(query, history)
+    evidence, strategy = advanced_retrieval(rewritten_query)
+    context = build_context(evidence)
+
+    return rewritten_query, evidence, strategy, context
+
 
 # Streamlit UI
 st.title("HotpotQA RAG Agent")
