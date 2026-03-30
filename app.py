@@ -38,7 +38,7 @@ def early_stop(results):
     scores = [p.score for p in results if hasattr(p, "score")]
 
     if len(scores) < 2:
-        return True, "Chỉ 1 tài liệu → đủ"
+        return True, "Only 1 document → sufficient"
 
     top1, top2 = scores[0], scores[1]
     gap = top1 - top2
@@ -49,15 +49,15 @@ def early_stop(results):
     print(f"[DEBUG] top1={top1:.3f}, top2={top2:.3f}, gap={gap:.3f}, titles={unique_titles}")
 
     if top1 > 0.85:
-        return True, "Top-1 score rất cao"
+        return True, "Top-1 score is very high"
 
     if gap > 0.2:
-        return True, "Score gap lớn"
+        return True, "Large score gap"
 
     if unique_titles == 1 and top1 > 0.75:
-        return True, "Single doc đủ mạnh"
+        return True, "Single document is strong enough"
 
-    return False, "Cần multi-hop"
+    return False, "Need multi-hop"
 
 def rewrite_query_with_history(query, history):
     if len(history) < 2:
@@ -119,7 +119,7 @@ def advanced_retrieval(query_text, top_k=5):
     )
 
     if len(hop1_points) <= 1:
-        return hop1_points, "Early Stop (1 tài liệu)"
+        return hop1_points, "Early Stop (1 document)"
 
     should_stop, reason = early_stop(hop1_points)
 
@@ -169,7 +169,7 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-query = st.chat_input("Nhập câu hỏi...")
+query = st.chat_input("Enter your question...")
 
 if query:
 
@@ -186,10 +186,10 @@ if query:
         query, st.session_state.messages
     )
 
-    with st.status("Đang truy vết dữ liệu...", expanded=True):
+    with st.status("Retrieving documents...", expanded=True):
         evidence, strategy = advanced_retrieval(rewritten_query)
 
-        st.write(f"Chiến lược: **{strategy}**")
+        st.write(f"Strategy: **{strategy}**")
 
         context = "\n\n".join([
             f"[{i+1}] {p.payload.get('title')}\n{p.payload.get('text')}"
@@ -197,26 +197,25 @@ if query:
         ])
 
     with st.chat_message("assistant"):
-        with st.spinner("Đang suy luận..."):
-            prompt = f"""Bạn là hệ thống QA suy luận nhiều bước (multi-hop reasoning).
+        with st.spinner("Reasoning..."):
+            prompt = f"""You are a multi-hop question answering system.
 
-                QUY TẮC: 
-                1. TRÍCH DẪN: Luôn kèm số thứ tự tài liệu [1], [2] khi đưa ra thông tin. 
-                2. SO SÁNH: Nếu câu hỏi so sánh, hãy lập luận về từng đối tượng trước khi kết luận. 
-                3. TRUNG THỰC: Nếu không có thông tin trong tài liệu, hãy nói 'Tôi không đủ khả năng để trả lời câu hỏi này'. 
-                4. CỐ GẮNG SỬ DỤNG TÀI LIỆU: Cố gắng phân tích và sử dụng thông tin từ tài liệu để trả lời, đừng chỉ dựa vào kiến thức chung.
-                5. KẾT LUẬN: Đưa ra câu trả lời cuối cùng cho câu hỏi một cách đơn giản và rõ ràng, không vòng vo.
+RULES:
+1. CITATION: Always cite sources using [1], [2], etc.
+2. COMPARISON: If it's a comparison question, analyze each entity before concluding.
+3. HONESTY: If the answer is not in the documents, say "I do not have enough information to answer this question."
+4. USE EVIDENCE: Base your reasoning on the provided documents, not only general knowledge.
+5. FINAL ANSWER: Provide a clear and concise final answer.
 
-                TÀI LIỆU:
-                {context}
+DOCUMENTS:
+{context}
 
-                CÂU HỎI:
-                {query}
+QUESTION:
+{query}
 
-                TRẢ LỜI:
-                """
+ANSWER:
+"""
 
-            # Add recent history to prompt
             history_for_llm = [
                 {"role": m["role"], "content": m["content"]}
                 for m in st.session_state.messages[-6:]
@@ -243,7 +242,7 @@ if query:
                 })
 
             except Exception as e:
-                st.error(f"Lỗi API: {e}")
+                st.error(f"API Error: {e}")
 
     with st.expander("Debug Metadata"):
         st.json([
@@ -257,6 +256,6 @@ if query:
         ])
 
 # Reset
-if st.button("Xóa lịch sử"):
+if st.button("Clear chat history"):
     st.session_state.messages = []
     st.rerun()
