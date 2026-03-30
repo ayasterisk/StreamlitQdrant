@@ -134,8 +134,6 @@ def advanced_retrieval(query_text, top_k=5):
     should_stop, reason = early_stop(hop1_points)
 
     if should_stop:
-        trace.log(
-            {"Strategy", f"Early Stop: {reason}"})
         return hop1_points, f"Early Stop ({reason})"
 
     # HOP-2
