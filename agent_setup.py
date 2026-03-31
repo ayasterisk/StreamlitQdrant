@@ -33,6 +33,5 @@ def get_agent_executor(memory):
         tools=tools, 
         memory=memory, 
         verbose=True,
-        max_iterations=3,
         handle_parsing_errors=True
     )
