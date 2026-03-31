@@ -1,10 +1,11 @@
 import streamlit as st
-from langchain.memory import ConversationBufferWindowMemory
-from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
-from agent_setup import get_agent_executor
 
 # UI Setup
 st.set_page_config(page_title="Multi-hop Agent", layout="wide")
+
+from langchain.memory import ConversationBufferWindowMemory
+from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
+from agent_setup import get_agent_executor
 
 # Memory & Messages Initialization
 if "langchain_memory" not in st.session_state:
