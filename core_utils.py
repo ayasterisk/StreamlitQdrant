@@ -7,32 +7,31 @@ from langchain_openai import ChatOpenAI
 
 @st.cache_resource
 def get_resources():
-    # Access environment variables for LangSmith and Qdrant
-    os.environ["LANGCHAIN_TRACING_V2"] = st.secrets["LANGCHAIN_TRACING_V2"]
-    os.environ["LANGCHAIN_API_KEY"] = st.secrets["LANGCHAIN_API_KEY"]
-    os.environ["LANGCHAIN_PROJECT"] = st.secrets["LANGCHAIN_PROJECT"]
+    os.environ["LANGCHAIN_TRACING_V2"] = st.secrets.get("LANGCHAIN_TRACING_V2", "false")
+    os.environ["LANGCHAIN_API_KEY"] = st.secrets.get("LANGCHAIN_API_KEY", "")
+    os.environ["LANGCHAIN_PROJECT"] = st.secrets.get("LANGCHAIN_PROJECT", "Multi-hop-RAG")
 
-    # Access environment variables for Qdrant
     client = QdrantClient(
         url=st.secrets["QDRANT_URL"],
         api_key=st.secrets["QDRANT_API_KEY"]
     )
     
-    # Embedding Models
     dense_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
     sparse_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
+
+    api_key = st.secrets["DEEPSEEK_API_KEY"]
+    base_url = "https://api.deepseek.com"
     
-    # DeepSeek Client
     raw_llm = OpenAI(
-        api_key=st.secrets["DEEPSEEK_API_KEY"],
-        base_url="https://api.deepseek.com"
+        api_key=api_key,
+        base_url=base_url
     )
     
-    # LangChain LLM Wrapper
+    # 5. LangChain LLM Wrapper (Dùng tham số chuẩn của langchain-openai mới)
     langchain_llm = ChatOpenAI(
         model='deepseek-reasoner', 
-        openai_api_key=st.secrets["DEEPSEEK_API_KEY"], 
-        openai_api_base="https://api.deepseek.com",
+        api_key=api_key,           # Sử dụng tham số api_key thay vì openai_api_key
+        base_url=base_url,         # Sử dụng tham số base_url thay vì openai_api_base
         streaming=True
     )
     
