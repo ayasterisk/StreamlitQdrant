@@ -1,307 +1,202 @@
-import os
-from langsmith import traceable, trace
 import streamlit as st
 from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding, SparseTextEmbedding
 from openai import OpenAI
 
-st.set_page_config(page_title="HotpotQA RAG Agent", layout="wide")
+# --- UI CONFIGURATION ---
+st.set_page_config(page_title="DeepSeek-R1 Multi-hop Agent", layout="wide", page_icon="🧠")
 
-# Environment variables for LangSmith tracing
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_API_KEY"] = st.secrets["LANGSMITH_API_KEY"]
-os.environ["LANGCHAIN_PROJECT"] = "hotpotqa-rag"
-
-# Session memory
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# --- RESOURCE INITIALIZATION ---
 @st.cache_resource
 def init_resources():
+    # Initialize Qdrant Client
     client = QdrantClient(
         url=st.secrets["QDRANT_URL"],
         api_key=st.secrets["QDRANT_API_KEY"]
     )
-
+    
+    # Initialize Embedding Models
     dense_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
     sparse_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
-
+    
+    # Initialize DeepSeek Client
     llm_client = OpenAI(
         api_key=st.secrets["DEEPSEEK_API_KEY"],
         base_url="https://api.deepseek.com"
     )
-
     return client, dense_model, sparse_model, llm_client
-
 
 client, dense_model, sparse_model, llm_client = init_resources()
 COLLECTION_NAME = "hotpot_qa"
 
-# Early stopping function
-@traceable(name="Early Stop Decision")
-def early_stop(results):
-    if not results:
-        return False, "No results"
-
-    scores = [p.score for p in results if hasattr(p, "score")]
-
-    if len(scores) < 2:
-        return True, "Only 1 document → sufficient"
-
-    top1, top2 = scores[0], scores[1]
-    gap = top1 - top2
-
-    titles = [p.payload.get("title", "") for p in results[:3]]
-    unique_titles = len(set(titles))
-
-    if top1 > 0.85:
-        return True, "Top-1 score is very high"
-
-    if gap > 0.2:
-        return True, "Large score gap"
-
-    if unique_titles == 1 and top1 > 0.75:
-        return True, "Single document is strong enough"
-
-    return False, "Need multi-hop"
-
-# Query rewriting function
-@traceable(name="Rewrite Query with History")
-def rewrite_query_with_history(query, history):
-    if len(history) < 2:
-        return query
-
-    history_text = "\n".join([
-        f"{m['role']}: {m['content']}"
-        for m in history[-4:]
-    ])
-
-    prompt = f"""
-Rewrite the question to be self-contained.
-
-Chat history:
-{history_text}
-
-Question:
-{query}
-
-Rewritten question:
-"""
-
+# --- DEEPSEEK-REASONER HELPER FUNCTION ---
+def call_reasoner(messages):
+    """Calls DeepSeek-R1 and returns (reasoning_content, final_content)"""
     try:
         response = llm_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2
+            model="deepseek-reasoner",
+            messages=messages
         )
-        return response.choices[0].message.content.strip()
-    except:
-        return query
+        reasoning = getattr(response.choices[0].message, 'reasoning_content', "No reasoning provided.")
+        content = response.choices[0].message.content
+        return reasoning, content
+    except Exception as e:
+        st.error(f"API Error: {e}")
+        return "", "I encountered an error connecting to the AI service."
 
-# Main retrieval function
-@traceable(name="Hybrid Retrieval + Multi-hop")
-def advanced_retrieval(query_text, top_k=5):
+# --- LOGIC 1: SMART QUERY REWRITE ---
+def smart_rewrite(query, history):
+    """Rewrites the query only if it depends on conversation history"""
+    if not history:
+        return query, False
+
+    prompt = f"""
+    Analyze the chat history and the current question.
+    History: {history[-3:]}
+    Question: "{query}"
+
+    Task:
+    - If the question is standalone (e.g., "Who is Steve Jobs?"), respond exactly with: ORIGINAL
+    - If the question refers to previous topics (e.g., "When was he born?"), rewrite it into a complete search query.
+
+    Format: Respond only with the rewritten text or the word ORIGINAL.
+    """
+    _, result = call_reasoner([{"role": "user", "content": prompt}])
     
-    # Embed query
+    if "ORIGINAL" in result.upper() and len(result) < 15:
+        return query, False
+    return result.strip(), True
+
+# --- LOGIC 2: ADVANCED RETRIEVAL (HYBRID + MULTI-HOP) ---
+def advanced_retrieval(query_text):
+    """Performs Hybrid Search and decides if a second hop is needed using R1 reasoning"""
+    
+    # Generate Embeddings
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse_raw = list(sparse_model.embed([query_text]))[0]
-
     query_sparse = models.SparseVector(
-        indices=query_sparse_raw.indices.tolist(),
+        indices=query_sparse_raw.indices.tolist(), 
         values=query_sparse_raw.values.tolist()
     )
 
+    # Step 1: Hop-1 Search
     hop1_points = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
-            models.Prefetch(query=query_dense, using="dense", limit=20),
-            models.Prefetch(query=query_sparse, using="sparse", limit=20),
+            models.Prefetch(query=query_dense, using="dense", limit=15),
+            models.Prefetch(query=query_sparse, using="sparse", limit=15),
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=top_k
+        limit=5
     ).points
 
-    hop1_points = sorted(
-        hop1_points,
-        key=lambda x: getattr(x, "score", 0),
-        reverse=True
-    )
+    if not hop1_points:
+        return [], "No results found", "No relevant documents were found in the database."
 
-    if len(hop1_points) <= 1:
-        trace.log("Early Stop", "Only 1 document retrieved")
-        return hop1_points, "Early Stop (1 document)"
+    # Step 2: Early Stop Reasoning via R1
+    context_preview = "\n".join([f"- {p.payload.get('title')}: {p.payload.get('text')[:200]}..." for p in hop1_points[:2]])
+    stop_prompt = f"""
+    Question: {query_text}
+    Top Retrieved Docs:
+    {context_preview}
 
-    should_stop, reason = early_stop(hop1_points)
+    Does the information above fully answer the question, or do you need to look up more bridge entities?
+    Reply 'STOP' if sufficient, otherwise reply 'CONTINUE' with a brief reason.
+    """
+    reasoning, decision = call_reasoner([{"role": "user", "content": stop_prompt}])
+    
+    if "STOP" in decision.upper():
+        return hop1_points, "Early Stop (Sufficient Information)", reasoning
 
-    if should_stop:
-        return hop1_points, f"Early Stop ({reason})"
+    # Step 3: Hop-2 Retrieval (Fetch linked documents by Title)
+    bridge_titles = [p.payload.get("title") for p in hop1_points[:3]]
+    hop2_points = client.scroll(
+        collection_name=COLLECTION_NAME,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="title", match=models.MatchAny(any=bridge_titles))]
+        ),
+        limit=5
+    )[0]
 
-    # HOP-2
     final_evidence = list(hop1_points)
     seen_ids = {p.id for p in final_evidence}
+    for p in hop2_points:
+        if p.id not in seen_ids:
+            final_evidence.append(p)
+            seen_ids.add(p.id)
 
-    bridge_titles = {
-        p.payload.get("title")
-        for p in hop1_points
-        if p.payload.get("is_supporting")
-    }
+    return final_evidence, "Full Multi-hop Retrieval", reasoning
 
-    if bridge_titles:
-        hop2_points = client.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="title",
-                        match=models.MatchAny(any=list(bridge_titles))
-                    ),
-                    models.FieldCondition(
-                        key="is_supporting",
-                        match=models.MatchValue(value=True)
-                    )
-                ]
-            ),
-            limit=10
-        )[0]
+# --- STREAMLIT UI ---
+st.title("Multi-hop Agent")
+st.caption("RAG System")
 
-        for p in hop2_points:
-            if p.id not in seen_ids:
-                final_evidence.append(p)
-                seen_ids.add(p.id)
-
-    trace.log({
-        "query": query_text,
-        "num_docs": len(final_evidence),
-        "titles": [p.payload.get("title") for p in final_evidence],
-        "scores": [getattr(p, "score", None) for p in final_evidence],
-        "is_supporting": [p.payload.get("is_supporting") for p in final_evidence]
-    })
-    
-    return final_evidence, "Full Multi-hop"
-
-# Context building function
-@traceable(name="Build Context")
-def build_context(evidence):
-    return "\n\n".join([
-        f"[{i+1}] {p.payload.get('title')}\n{p.payload.get('text')}"
-        for i, p in enumerate(evidence)
-    ])
-
-# LLM reasoning function
-@traceable(name="LLM Reasoning")
-def generate_answer(llm_client, history_for_llm):
-    response = llm_client.chat.completions.create(
-        model="deepseek-chat",
-        messages=history_for_llm,
-        temperature=0.3
-    )
-    return response.choices[0].message.content
-
-# Full RAG pipeline function
-@traceable(name="Full RAG Pipeline")
-def rag_pipeline(query, history):
-    rewritten_query = rewrite_query_with_history(query, history)
-    evidence, strategy = advanced_retrieval(rewritten_query)
-    context = build_context(evidence)
-
-    return rewritten_query, evidence, strategy, context
-
-
-# Streamlit UI
-st.title("HotpotQA RAG Agent")
-
-# History display
+# Display Chat History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-query = st.chat_input("Enter your question...")
+# Chat Input
+query = st.chat_input("Ask a complex question...")
 
 if query:
-
-    st.session_state.messages.append({
-        "role": "user",
-        "content": query
-    })
-
-    with st.chat_message("user"):
-        st.write(query)
-
-    # Rewrite query
-    rewritten_query = rewrite_query_with_history(
-        query, st.session_state.messages
-    )
-
-    with st.status("Retrieving documents...", expanded=True):
-        evidence, strategy = advanced_retrieval(rewritten_query)
-
-        st.write(f"Strategy: **{strategy}**")
-
-        context = "\n\n".join([
-            f"[{i+1}] {p.payload.get('title')}\n{p.payload.get('text')}"
-            for i, p in enumerate(evidence)
-        ])
+    st.session_state.messages.append({"role": "user", "content": query})
+    st.chat_message("user").write(query)
 
     with st.chat_message("assistant"):
-        with st.spinner("Reasoning..."):
-            prompt = f"""You are a multi-hop question answering system.
+        # 1. QUERY ANALYSIS & REWRITING
+        with st.status("Analyzing context...", expanded=False) as status:
+            rewritten_q, was_rewritten = smart_rewrite(query, st.session_state.messages[:-1])
+            if was_rewritten:
+                st.write(f"Optimized Query: **{rewritten_q}**")
+            else:
+                st.write("Query is standalone. No rewrite needed.")
+            status.update(label="Query Analysis Complete", state="complete")
 
-RULES:
-1. CITATION: Always cite sources using [1], [2], etc.
-2. COMPARISON: If it's a comparison question, analyze each entity before concluding.
-3. HONESTY: If the answer is not in the documents, say "I do not have enough information to answer this question."
-4. USE EVIDENCE: Base your reasoning on the provided documents, not only general knowledge.
-5. FINAL ANSWER: Provide a clear and concise final answer.
+        # 2. KNOWLEDGE RETRIEVAL
+        with st.status("Retrieving documents...", expanded=True):
+            evidence, strategy, stop_logic = advanced_retrieval(rewritten_q)
+            st.write(f"Retrieval Strategy: **{strategy}**")
+            with st.expander("AI Thinking (Retriever Level)"):
+                st.markdown(stop_logic)
+        
+        # 3. FINAL REASONING & ANSWERING
+        context = "\n\n".join([f"[{i+1}] {p.payload.get('title')}: {p.payload.get('text')}" for i, p in enumerate(evidence)])
+        final_prompt = f"""Use the following documents to answer the user's question accurately. 
+        Always cite sources using [1], [2], etc.
+        
+        DOCUMENTS:
+        {context}
+        
+        QUESTION:
+        {query}
+        """
 
-DOCUMENTS:
-{context}
+        with st.spinner("DeepSeek is thinking..."):
+            full_reasoning, final_answer = call_reasoner([
+                {"role": "system", "content": "You are a logical RAG assistant. Use step-by-step thinking to verify facts against the provided documents."},
+                {"role": "user", "content": final_prompt}
+            ])
 
-QUESTION:
-{query}
+            # Display R1 Thinking Process
+            with st.expander("Thinking Process", expanded=True):
+                st.markdown(full_reasoning)
 
-ANSWER:
-"""
+            # Display Final Answer
+            st.markdown(final_answer)
+            st.session_state.messages.append({"role": "assistant", "content": final_answer})
 
-            history_for_llm = [
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages[-6:]
-            ]
+    # Debug Metadata Expanders
+    with st.expander("Source Metadata"):
+        st.json([{
+            "title": p.payload.get("title"),
+            "text": p.payload.get("text")[:200],
+            "score": getattr(p, "score", None)} for p in evidence])
 
-            history_for_llm.append({
-                "role": "user",
-                "content": prompt
-            })
-
-            try:
-                response = llm_client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=history_for_llm,
-                    temperature=0.3
-                )
-
-                answer = response.choices[0].message.content
-                st.markdown(answer)
-
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer
-                })
-
-            except Exception as e:
-                st.error(f"API Error: {e}")
-
-    with st.expander("Debug Metadata"):
-        st.json([
-            {
-                "title": p.payload.get("title"),
-                "text": p.payload.get("text"),
-                "score": getattr(p, "score", None),
-                "is_supporting": p.payload.get("is_supporting")
-            }
-            for p in evidence
-        ])
-
-# Reset
-if st.button("Clear chat history"):
+# Sidebar Controls
+if st.sidebar.button("Clear Chat History"):
     st.session_state.messages = []
     st.rerun()
