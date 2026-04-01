@@ -9,7 +9,7 @@ from langchain_openai import ChatOpenAI
 def get_resources():
     os.environ["LANGCHAIN_TRACING_V2"] = "true" if st.secrets.get("LANGCHAIN_TRACING_V2") else "false"
     os.environ["LANGCHAIN_API_KEY"] = str(st.secrets.get("LANGCHAIN_API_KEY", ""))
-    os.environ["LANGCHAIN_PROJECT"] = str(st.secrets.get("LANGCHAIN_PROJECT", "Multi-hop-RAG"))
+    os.environ["LANGCHAIN_PROJECT"] = str(st.secrets.get("LANGCHAIN_PROJECT", "Multihop-RAG"))
 
     client = QdrantClient(
         url=str(st.secrets["QDRANT_URL"]),

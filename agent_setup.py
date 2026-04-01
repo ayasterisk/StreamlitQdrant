@@ -23,8 +23,6 @@ def get_agent_executor(memory):
         ("user", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
     ])
-
-    # Tạo Agent
     agent = create_openai_tools_agent(langchain_llm, tools, prompt)
     
     # Agent Executor
