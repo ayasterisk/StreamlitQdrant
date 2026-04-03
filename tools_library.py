@@ -9,31 +9,34 @@ client, dense_model, sparse_model, raw_llm, _ = get_resources()
 
 
 @tool
+@tool
 def hybrid_search_tool(query_text: str) -> str:
     """
     MANDATORY retrieval tool.
     """
-    history = st.session_state.get("messages", [])[-2:]
-    context = " ".join([m["content"] for m in history if "content" in m])
 
+    history = st.session_state.get("messages", [])[-3:]
+
+    context = " ".join([
+        m["content"] for m in history
+        if m["role"] in ["user", "assistant"]
+    ])
+    
     final_query = f"{context} {query_text}".strip()
 
-    # Dense
     query_dense = list(dense_model.embed([final_query]))[0].tolist()
 
-    # Sparse
     query_sparse_raw = list(sparse_model.embed([final_query]))[0]
     query_sparse = models.SparseVector(
         indices=query_sparse_raw.indices.tolist(),
         values=query_sparse_raw.values.tolist()
     )
 
-    # Hybrid search
     points = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
-            models.Prefetch(query=query_dense, using="dense", limit=50),
-            models.Prefetch(query=query_sparse, using="sparse", limit=50),
+            models.Prefetch(query=query_dense, using="dense", limit=15),
+            models.Prefetch(query=query_sparse, using="sparse", limit=15),
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),
         limit=5
