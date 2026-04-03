@@ -5,7 +5,7 @@ from tools_library import tools
 from trim import trim_messages
 import streamlit as st
 
-_, _, _, langchain_llm = get_resources()
+_, _, _, _, langchain_llm = get_resources()
 
 @st.cache_resource
 def get_shared_memory():
@@ -14,26 +14,28 @@ def get_shared_memory():
 def get_agent_executor():
     memory = get_shared_memory()
 
+    system_prompt = """You are a retrieval-only QA assistant. Answer ONLY based on tool outputs.
+
+    THINKING PROCESS:
+    1. REWRITE: If the user question uses pronouns (e.g., "they", "it"), rewrite it into a standalone query using chat history.
+    2. SEARCH: Call 'hybrid_search_tool' with the query.
+    3. EVALUATE & ACT:
+       - If the retrieved text ALREADY contains the answer -> Provide the answer immediately and STOP.
+       - If the text is INSUFFICIENT to answer -> Identify the relevant 'titles' from the search results to expand. Use titles where 'is_supporting' is true as primary leads for expansion.
+       - Call 'hop2_expansion_tool' ONLY if you need more details for those specific titles to finalize your answer.
+
+    RULES:
+    - ALWAYS cite sources as [title].
+    - NEVER answer using your own knowledge.
+    - NEVER call the same tool with the same arguments twice.
+    - If no information is found after both steps, say "I don't know based on the database."
+
+    Answer in English. Concise and direct."""
+
     agent = create_agent(
         model=langchain_llm,
         tools=tools,
-        system_prompt="""You are an expert RAG assistant.
-
-        CORE RULES:
-        1. CONTEXTUALIZE: Before calling hybrid_search_tool, look at the chat history. 
-           If the user uses pronouns (they, he, it, that) or follow-up questions, 
-           REWRITE the query to be a standalone search term.
-           Example:
-           - User: "Who are they?"
-           - History: Discussing Ed Wood and Scott Derrickson.
-           - Action: Call hybrid_search_tool(query_text="Who are Ed Wood and Scott Derrickson?")
-
-        2. RETRIEVAL ONLY: Only answer using information from tools. 
-        3. NO HALLUCINATION: If not in database, say "I don't know based on the database."
-        4. CITATION: Cite as [title].
-
-        Language: English. Concise.
-        """,
+        system_prompt=system_prompt,
         middleware=[trim_messages],
         checkpointer=memory,
     )
