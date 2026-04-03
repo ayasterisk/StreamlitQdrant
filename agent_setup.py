@@ -12,7 +12,6 @@ def get_shared_memory():
     return InMemorySaver()
 
 def get_agent_executor():
-    # Sử dụng cùng một instance memory cho toàn bộ session
     memory = get_shared_memory()
 
     agent = create_agent(

@@ -3,7 +3,6 @@ import json
 from core_utils import get_resources, COLLECTION_NAME
 from qdrant_client import models
 
-# Load resources once
 client, dense_model, sparse_model, langchain_llm = get_resources()
 
 @tool

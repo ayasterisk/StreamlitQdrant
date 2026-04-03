@@ -2,12 +2,10 @@ import os
 import streamlit as st
 from qdrant_client import QdrantClient
 from fastembed import TextEmbedding, SparseTextEmbedding
-from openai import OpenAI
 from langchain_openai import ChatOpenAI
 
 @st.cache_resource
 def get_resources():
-    # LangSmith Tracing
     os.environ["LANGCHAIN_TRACING_V2"] = "true" if st.secrets.get("LANGCHAIN_TRACING_V2") else "false"
     os.environ["LANGCHAIN_API_KEY"] = str(st.secrets.get("LANGCHAIN_API_KEY", ""))
     os.environ["LANGCHAIN_PROJECT"] = str(st.secrets.get("LANGCHAIN_PROJECT", "Multihop-RAG"))
