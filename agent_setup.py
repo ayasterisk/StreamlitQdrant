@@ -5,7 +5,7 @@ from tools_library import tools
 from trim import trim_messages
 import streamlit as st
 
-_, _, _, _, langchain_llm = get_resources()
+_, _, _, langchain_llm = get_resources()
 
 @st.cache_resource
 def get_shared_memory():

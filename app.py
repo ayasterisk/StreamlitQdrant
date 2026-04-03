@@ -2,7 +2,6 @@ import streamlit as st
 
 st.set_page_config(page_title="Multi-hop Agent", layout="wide")
 
-from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
 from agent_setup import get_agent_executor
 
 if "messages" not in st.session_state:
