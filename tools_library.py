@@ -8,7 +8,7 @@ client, dense_model, sparse_model, _ = get_resources()
 
 class HybridSearchInput(BaseModel):
     query_text: str = Field(
-        description="The standalone search query. Must be descriptive and resolve any pronouns from history."
+        description="A standalone search query. MUST reflect the CURRENT user's intent (e.g., if they ask 'Who', search for 'biography'; if they ask 'When', search for 'dates')."
     )
     limit: int = Field(
         default=10, 
