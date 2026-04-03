@@ -9,7 +9,6 @@ client, dense_model, sparse_model, raw_llm, _ = get_resources()
 
 
 @tool
-@tool
 def hybrid_search_tool(query_text: str) -> str:
     """
     MANDATORY retrieval tool.
