@@ -7,6 +7,7 @@ from langchain_openai import ChatOpenAI
 
 @st.cache_resource
 def get_resources():
+    # LangSmith Tracing
     os.environ["LANGCHAIN_TRACING_V2"] = "true" if st.secrets.get("LANGCHAIN_TRACING_V2") else "false"
     os.environ["LANGCHAIN_API_KEY"] = str(st.secrets.get("LANGCHAIN_API_KEY", ""))
     os.environ["LANGCHAIN_PROJECT"] = str(st.secrets.get("LANGCHAIN_PROJECT", "Multihop-RAG"))
@@ -22,11 +23,6 @@ def get_resources():
     ds_api_key = str(st.secrets["DEEPSEEK_API_KEY"]).strip()
     ds_base_url = "https://api.deepseek.com"
 
-    raw_llm = OpenAI(
-        api_key=ds_api_key,
-        base_url=ds_base_url
-    )
-    
     langchain_llm = ChatOpenAI(
         model='deepseek-reasoner', 
         openai_api_key=ds_api_key,
@@ -35,6 +31,6 @@ def get_resources():
         streaming=True
     )
     
-    return client, dense_model, sparse_model, raw_llm, langchain_llm
+    return client, dense_model, sparse_model, langchain_llm
 
 COLLECTION_NAME = "hotpot_qa"

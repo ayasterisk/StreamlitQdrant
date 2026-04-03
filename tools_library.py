@@ -2,30 +2,18 @@ from langchain.tools import tool
 import json
 from core_utils import get_resources, COLLECTION_NAME
 from qdrant_client import models
-import streamlit as st
 
-# Get resources
-client, dense_model, sparse_model, raw_llm, _ = get_resources()
-
+# Load resources once
+client, dense_model, sparse_model, langchain_llm = get_resources()
 
 @tool
 def hybrid_search_tool(query_text: str) -> str:
     """
-    MANDATORY retrieval tool.
+    Search information in the database. 
+    Input MUST be a standalone search query with full context (names, entities).
     """
-
-    history = st.session_state.get("messages", [])[-3:]
-
-    context = " ".join([
-        m["content"] for m in history
-        if m["role"] in ["user", "assistant"]
-    ])
-    
-    final_query = f"{context} {query_text}".strip()
-
-    query_dense = list(dense_model.embed([final_query]))[0].tolist()
-
-    query_sparse_raw = list(sparse_model.embed([final_query]))[0]
+    query_dense = list(dense_model.embed([query_text]))[0].tolist()
+    query_sparse_raw = list(sparse_model.embed([query_text]))[0]
     query_sparse = models.SparseVector(
         indices=query_sparse_raw.indices.tolist(),
         values=query_sparse_raw.values.tolist()
@@ -41,71 +29,28 @@ def hybrid_search_tool(query_text: str) -> str:
         limit=5
     ).points
 
-    if not points:
-        return json.dumps({"source": "qdrant", "documents": []}, indent=2)
-
     results = []
     for p in points:
         results.append({
             "title": p.payload.get("title"),
-            "text": p.payload.get("text"),
-            "is_supporting": p.payload.get("is_supporting", False)
+            "text": p.payload.get("text")
         })
 
-    return json.dumps({
-        "source": "qdrant",
-        "documents": results
-    }, indent=2)
-
+    return json.dumps({"documents": results}, indent=2)
 
 @tool
 def hop2_expansion_tool(titles: list) -> str:
-    """
-    Fallback multi-hop tool.
-    """
-
-    if not titles:
-        return json.dumps({"documents": []})
-
+    """Useful to get more details about specific article titles."""
+    if not titles: return "[]"
     results = client.scroll(
         collection_name=COLLECTION_NAME,
         scroll_filter=models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="title",
-                    match=models.MatchAny(any=titles)
-                )
-            ]
+            must=[models.FieldCondition(key="title", match=models.MatchAny(any=titles))]
         ),
-        limit=10
+        limit=5
     )[0]
+    
+    docs = [{"title": p.payload.get("title"), "text": p.payload.get("text")} for p in results]
+    return json.dumps(docs, indent=2)
 
-    if not results:
-        return json.dumps({"documents": []})
-
-    supporting_docs = []
-    other_docs = []
-
-    for p in results:
-        doc = {
-            "title": p.payload.get("title"),
-            "text": p.payload.get("text"),
-            "is_supporting": p.payload.get("is_supporting", False)
-        }
-
-        if doc["is_supporting"]:
-            supporting_docs.append(doc)
-        else:
-            other_docs.append(doc)
-
-    final_docs = supporting_docs + other_docs
-
-    return json.dumps({
-        "documents": final_docs
-    }, indent=2)
-
-
-tools = [
-    hybrid_search_tool,
-    hop2_expansion_tool
-]
+tools = [hybrid_search_tool, hop2_expansion_tool]

@@ -1,52 +1,42 @@
 import streamlit as st
-
-# UI
-st.set_page_config(page_title="Multi-hop Agent", layout="wide")
-
 from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
 from agent_setup import get_agent_executor
 
-# Init UI memory
+st.set_page_config(page_title="Multi-hop Agent", layout="wide")
+
+# UI Logic
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Sidebar
 with st.sidebar:
-    st.title("System Info & Controls")
-    st.success("Tracing: ON (LangSmith)")
-    st.info("LLM: DeepSeek-R1")
-
-    if st.button("Delete Conversation History"):
+    st.title("Controls")
+    if st.button("Clear History"):
         st.session_state.messages = []
+        st.cache_resource.clear()
         st.rerun()
 
-# Display history
-st.title("Multi-hop Agent")
+st.title("Multi-hop RAG Agent")
 
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# Input
-if query := st.chat_input("Ask a complex question..."):
+if query := st.chat_input("Ask about Scott Derrickson..."):
     st.session_state.messages.append({"role": "user", "content": query})
     st.chat_message("user").write(query)
 
     with st.chat_message("assistant"):
-
         st_callback = StreamlitCallbackHandler(st.container())
 
         agent = get_agent_executor()
-
-        config = {"configurable": {"thread_id": "1"}}
+        
+        config = {"configurable": {"thread_id": "user_session_1"}, "callbacks": [st_callback]}
 
         try:
-            response = agent.invoke(
-                {"messages": [{"role": "user", "content": query}]},
-                config
-            )
+            input_data = {"messages": [{"role": "user", "content": query}]}
+            
+            response = agent.invoke(input_data, config)
 
             final_answer = response["messages"][-1].content
-
             st.markdown(final_answer)
 
             st.session_state.messages.append({

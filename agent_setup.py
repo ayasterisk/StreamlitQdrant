@@ -3,52 +3,39 @@ from langgraph.checkpoint.memory import InMemorySaver
 from core_utils import get_resources
 from tools_library import tools
 from trim import trim_messages
+import streamlit as st
 
-_, _, _, _, langchain_llm = get_resources()
+_, _, _, langchain_llm = get_resources()
 
+@st.cache_resource
+def get_shared_memory():
+    return InMemorySaver()
 
 def get_agent_executor():
+    # Sử dụng cùng một instance memory cho toàn bộ session
+    memory = get_shared_memory()
 
     agent = create_agent(
         model=langchain_llm,
         tools=tools,
-        system_prompt = """You are a retrieval-only QA assistant.
+        system_prompt="""You are an expert RAG assistant.
 
-        CRITICAL RULE:
-        - You are ONLY allowed to answer using information retrieved from Qdrant.
-        - You MUST NOT use your own knowledge.
+        CORE RULES:
+        1. CONTEXTUALIZE: Before calling hybrid_search_tool, look at the chat history. 
+           If the user uses pronouns (they, he, it, that) or follow-up questions, 
+           REWRITE the query to be a standalone search term.
+           Example:
+           - User: "Who are they?"
+           - History: Discussing Ed Wood and Scott Derrickson.
+           - Action: Call hybrid_search_tool(query_text="Who are Ed Wood and Scott Derrickson?")
 
-        CONTEXT UNDERSTANDING:
-        - Chat history is provided.
-        - You MUST interpret follow-up questions using context.
-        - Resolve references like "they", "he", "she", "it" when needed.
+        2. RETRIEVAL ONLY: Only answer using information from tools. 
+        3. NO HALLUCINATION: If not in database, say "I don't know based on the database."
+        4. CITATION: Cite as [title].
 
-        QUERY STRATEGY:
-        - If the question is already clear → use it directly
-        - If the question is ambiguous (e.g., "they", "it", "that") 
-            → infer the full meaning using chat history
-        - Only rewrite the query when necessary
-
-        WORKFLOW:
-        1. Understand the question using chat history
-        2. If needed, reformulate it into a clearer query
-        3. Call hybrid_search_tool
-        4. If enough info → answer
-        5. If not → call hop2_expansion_tool
-
-        STRICT RULES:
-        - NEVER answer without calling hybrid_search_tool
-        - NEVER hallucinate
-        - If no data → say:
-        "I don't know based on the database."
-
-        EVIDENCE RULE:
-        - MUST cite sources using [title]
-
-        Answer in English. Be concise.
+        Language: English. Concise.
         """,
         middleware=[trim_messages],
-        checkpointer=InMemorySaver(),
+        checkpointer=memory,
     )
-
     return agent
