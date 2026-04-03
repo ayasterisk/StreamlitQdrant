@@ -1,32 +1,72 @@
 from langchain.tools import tool
-from pydantic import BaseModel, Field
 import json
 from core_utils import get_resources, COLLECTION_NAME
 from qdrant_client import models
+import streamlit as st
 
-client, dense_model, sparse_model, _ = get_resources()
+# Get resources
+client, dense_model, sparse_model, raw_llm, _ = get_resources()
 
-class HybridSearchInput(BaseModel):
-    query_text: str = Field(
-        description="A standalone search query. MUST reflect the CURRENT user's intent (e.g., if they ask 'Who', search for 'biography'; if they ask 'When', search for 'dates')."
-    )
-    limit: int = Field(
-        default=10, 
-        description="Number of top results to return. Use 15-20 for broad topics, 5-10 for specific facts."
-    )
 
-class Hop2Input(BaseModel):
-    titles: list[str] = Field(
-        description="A list of exact document titles to expand and get full content."
-    )
-
-@tool(args_schema=HybridSearchInput)
-def hybrid_search_tool(query_text: str, limit: int = 10) -> str:
+@tool
+def rewrite_query_tool(query: str) -> str:
     """
-    Search the knowledge base using hybrid retrieval (Dense + Sparse).
-    Use this to find initial evidence, snippets, and document titles.
+    OPTIONAL tool.
+
+    Use ONLY when:
+    - Question is ambiguous
+    - Depends on chat history
+
+    Rules:
+    - If clear → return "ORIGINAL"
+    - Do NOT add new information
     """
+
+    history = st.session_state.get("messages", [])[-3:]
+
+    # Skip rewrite if query is already clear
+    if not history or len(query.split()) > 8:
+        return query
+
+    prompt = f"""
+        Chat History: {history}
+        Current Question: {query}
+
+        Rewrite into a standalone search query.
+        If already clear → return "ORIGINAL"
+        """
+
+    response = raw_llm.chat.completions.create(
+        model="deepseek-reasoner",
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    result = response.choices[0].message.content.strip()
+
+    return query if "ORIGINAL" in result.upper() else result
+
+
+@tool
+def hybrid_search_tool(query_text: str) -> str:
+    """
+    MANDATORY retrieval tool.
+
+    You MUST use this tool before answering.
+
+    Purpose:
+    - Retrieve evidence from Qdrant ONLY
+
+    Output:
+    {
+      "source": "qdrant",
+      "documents": [
+        {title, text, is_supporting}
+      ]
+    }
+    """
+
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
+
     query_sparse_raw = list(sparse_model.embed([query_text]))[0]
     query_sparse = models.SparseVector(
         indices=query_sparse_raw.indices.tolist(),
@@ -36,42 +76,92 @@ def hybrid_search_tool(query_text: str, limit: int = 10) -> str:
     points = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
-            # Prefetch cố định ở 50 để tối ưu hóa chất lượng RRF
-            models.Prefetch(query=query_dense, using="dense", limit=50),
-            models.Prefetch(query=query_sparse, using="sparse", limit=50),
+            models.Prefetch(query=query_dense, using="dense", limit=15),#edit to 50
+            models.Prefetch(query=query_sparse, using="sparse", limit=15),
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),
-        limit=limit
+        limit=5 #dynamic
     ).points
+
+    if not points:
+        return json.dumps({
+            "source": "qdrant",
+            "documents": []
+        }, indent=2)
+
 
     results = []
     for p in points:
         results.append({
             "title": p.payload.get("title"),
             "text": p.payload.get("text"),
-            "is_supporting": p.payload.get("is_supporting")
+            "is_supporting": p.payload.get("is_supporting", False)
         })
-    return json.dumps(results, ensure_ascii=False)
+
+    return json.dumps({
+        "source": "qdrant",
+        "documents": results
+    }, indent=2)
 
 
-@tool(args_schema=Hop2Input)
-def hop2_expansion_tool(titles: list[str]) -> str:
+@tool
+def hop2_expansion_tool(titles: list) -> str:
     """
-    Fetch full detailed text for a list of specific titles. 
-    Use this only if hybrid_search_tool's snippet is insufficient.
+    FALLBACK tool.
+
+    Use ONLY IF:
+    - hybrid_search_tool results are insufficient
+    - multi-hop reasoning is required
+
+    Purpose:
+    - Expand supporting facts
+
+    Input:
+    - List of titles from previous results
     """
-    if not titles: return "[]"
-    
-    results, _ = client.scroll(
+
+    if not titles:
+        return json.dumps({"documents": []})
+
+    results = client.scroll(
         collection_name=COLLECTION_NAME,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="title", match=models.MatchAny(any=titles))]
+            must=[
+                models.FieldCondition(
+                    key="title",
+                    match=models.MatchAny(any=titles)
+                )
+            ]
         ),
-        limit=len(titles)
-    )
-    
-    docs = [{"title": p.payload.get("title"), "text": p.payload.get("text")} for p in results]
-    return json.dumps(docs, ensure_ascii=False)
+        limit=10
+    )[0]
 
+    if not results:
+        return json.dumps({"documents": []})
 
-tools = [hybrid_search_tool, hop2_expansion_tool]
+    supporting_docs = []
+    other_docs = []
+
+    for p in results:
+        doc = {
+            "title": p.payload.get("title"),
+            "text": p.payload.get("text"),
+            "is_supporting": p.payload.get("is_supporting", False)
+        }
+
+        if doc["is_supporting"]:
+            supporting_docs.append(doc)
+        else:
+            other_docs.append(doc)
+
+    final_docs = supporting_docs + other_docs
+
+    return json.dumps({
+        "documents": final_docs
+    }, indent=2)
+
+tools = [
+    rewrite_query_tool,
+    hybrid_search_tool,
+    hop2_expansion_tool
+]
