@@ -1,10 +1,10 @@
 import streamlit as st
-from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
-from agent_setup import get_agent_executor
 
 st.set_page_config(page_title="Multi-hop Agent", layout="wide")
 
-# UI Logic
+from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
+from agent_setup import get_agent_executor
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
