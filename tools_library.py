@@ -39,7 +39,8 @@ def hybrid_search_tool(query_text: str) -> str:
 
 @tool
 def hop2_expansion_tool(titles: list) -> str:
-    """Useful to get more details about specific article titles."""
+    """Useful to get more details about specific article titles.
+    Can skip if has enough information from hybrid_search_tool to answer the question."""
     if not titles: return "[]"
     results = client.scroll(
         collection_name=COLLECTION_NAME,
