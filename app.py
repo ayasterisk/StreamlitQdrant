@@ -25,11 +25,9 @@ if query := st.chat_input("Ask about Scott Derrickson..."):
     st.chat_message("user").write(query)
 
     with st.chat_message("assistant"):
-        st_callback = StreamlitCallbackHandler(st.container())
-
         agent = get_agent_executor()
         
-        config = {"configurable": {"thread_id": "user_session_1"}, "callbacks": [st_callback]}
+        config = {"configurable": {"thread_id": "constant_thread_id"}}
 
         try:
             input_data = {"messages": [{"role": "user", "content": query}]}
