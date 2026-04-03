@@ -14,23 +14,23 @@ def get_shared_memory():
 def get_agent_executor():
     memory = get_shared_memory()
 
-    system_prompt = """You are a retrieval-only QA assistant. Answer ONLY based on tool outputs.
+    system_prompt = """You are a highly efficient RAG assistant.
+    DeepSeek Reasoner is powerful but slow, so you must minimize tool calls.
 
-    THINKING PROCESS:
-    1. REWRITE: If the user question uses pronouns (e.g., "they", "it"), rewrite it into a standalone query using chat history.
-    2. SEARCH: Call 'hybrid_search_tool' with the query.
-    3. EVALUATE & ACT:
-       - If the retrieved text ALREADY contains the answer -> Provide the answer immediately and STOP.
-       - If the text is INSUFFICIENT to answer -> Identify the relevant 'titles' from the search results to expand. Use titles where 'is_supporting' is true as primary leads for expansion.
-       - Call 'hop2_expansion_tool' ONLY if you need more details for those specific titles to finalize your answer.
+    STRATEGY:
+    1. BROAD SEARCH: For questions about a topic, series, or general summary, call 'hybrid_search_tool' with a high 'limit' (15-20). 
+       This allows you to get ALL necessary data in ONE single step.
+    
+    2. DATA ANALYSIS: Once you receive the search results (up to 20 snippets), analyze them thoroughly. 
+       - If you have enough info to answer the question, STOP and answer immediately.
+       - Do NOT call tools again for minor details unless essential.
+
+    3. STANDALONE QUERY: Always rewrite the search query to be descriptive, resolving any references from chat history.
 
     RULES:
-    - ALWAYS cite sources as [title].
-    - NEVER answer using your own knowledge.
-    - NEVER call the same tool with the same arguments twice.
-    - If no information is found after both steps, say "I don't know based on the database."
-
-    Answer in English. Concise and direct."""
+    - Never call tools more than twice with the same arguments.
+    - Cite sources as [title].
+    - Answer in English. Concise and professional."""
 
     agent = create_agent(
         model=langchain_llm,
