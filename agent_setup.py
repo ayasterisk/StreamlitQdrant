@@ -1,73 +1,44 @@
-from langchain.agents import create_openai_tools_agent, AgentExecutor
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_agent
+from langgraph.checkpoint.memory import InMemorySaver
 from core_utils import get_resources
 from tools_library import tools
+from trim import trim_messages
 
 # Get LLM
 _, _, _, _, langchain_llm = get_resources()
 
 
-def get_agent_executor(memory):
+def get_agent_executor():
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a retrieval-only QA assistant.
-
-CRITICAL RULE:
-- You are ONLY allowed to answer using information retrieved from Qdrant.
-- You MUST NOT use your own knowledge.
-
-WORKFLOW:
-
-Step 0 (Query Rewrite - OPTIONAL):
-- If the question is ambiguous or depends on chat history:
-  → Call rewrite_query_tool
-  → If result != "ORIGINAL", use rewritten query
-- Otherwise, use original query
-
-Step 1 (MANDATORY):
-- You MUST call hybrid_search_tool using the final query
-
-Step 2 (Decision):
-- If retrieved documents contain enough information → answer
-- If NOT → go to Step 3
-
-Step 3 (Fallback - Multi-hop):
-- Extract titles from retrieved documents
-- Call hop2_expansion_tool with those titles
-
-STRICT RULES:
-- NEVER answer without calling hybrid_search_tool
-- NEVER answer if documents list is empty
-- NEVER use external knowledge
-- If insufficient data → say:
-  "I don't know based on the database."
-
-EVIDENCE RULE:
-- Answer MUST be based ONLY on retrieved documents
-- MUST cite sources using [title]
-
-EFFICIENCY:
-- Do NOT call hybrid_search_tool more than once
-- Use hop2 only if necessary
-
-Answer in English. Be concise and precise.
-"""),
-
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
-
-    agent = create_openai_tools_agent(
-        langchain_llm,
-        tools,
-        prompt
-    )
-
-    return AgentExecutor(
-        agent=agent,
+    agent = create_agent(
+        model=langchain_llm,
         tools=tools,
-        memory=memory,
-        verbose=True,
-        handle_parsing_errors=True
+        system_prompt="""You are a retrieval-only QA assistant.
+
+            CRITICAL RULE:
+            - You are ONLY allowed to answer using information retrieved from Qdrant.
+            - You MUST NOT use your own knowledge.
+
+            WORKFLOW:
+            1. You MUST call hybrid_search_tool first
+            2. If enough information → answer
+            3. If not → call hop2_expansion_tool
+
+            STRICT RULES:
+            - NEVER answer without calling hybrid_search_tool
+            - NEVER hallucinate
+            - If no data → say:
+            "I don't know based on the database."
+
+            EVIDENCE RULE:
+            - MUST cite sources using [title]
+
+            Use chat history if needed.
+
+            Answer in English. Be concise.
+            """,
+        middleware=[trim_messages],
+        checkpointer=InMemorySaver(),
     )
+
+    return agent
