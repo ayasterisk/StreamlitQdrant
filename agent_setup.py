@@ -1,14 +1,16 @@
+from streamlit import st
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
-
 from tools_library import tools
 
 
 def get_agent_executor():
     llm = ChatOpenAI(
         model="deepseek-reasoner",
-        temperature=0
+        temperature=0,
+        openai_api_key=st.secrets["DEEPSEEK_API_KEY"], 
+        openai_api_base="https://api.deepseek.com/v1"
     )
 
     memory = InMemorySaver()
