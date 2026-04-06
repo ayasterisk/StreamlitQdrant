@@ -3,29 +3,28 @@ from langgraph.checkpoint.memory import InMemorySaver
 from tools_library import tools
 from core_utils import get_resources
 
-# Lấy tài nguyên (4 biến từ core_utils của bạn)
+# Unpack 4 biến
 _, _, _, langchain_llm = get_resources()
 
-# Khởi tạo bộ nhớ Short-term
+# Khởi tạo bộ nhớ
 memory = InMemorySaver()
 
 def get_agent_app():
-    # Prompt hệ thống cho Agent
+    # Prompt hệ thống
     system_instruction = """You are a retrieval-only QA assistant using DeepSeek Reasoner.
 
     STRICT RULES:
     1. SEARCH: You MUST call 'hybrid_search_tool' for every question.
     2. DYNAMIC LIMIT: 
-       - If the question is broad (summary, list all), set top_k=15.
-       - If specific facts, set top_k=5.
-    3. MEMORY: Use 'rewrite_query_tool' if the user refers to past context.
-    4. KNOWLEDGE: Answer ONLY using retrieved data. If not found, say you don't know.
-    5. CITATION: Cite using [title].
+       - Summary/General questions: top_k=15.
+       - Specific facts: top_k=5.
+    3. MEMORY: Use 'rewrite_query_tool' if history is relevant.
+    4. NO KNOWLEDGE: Answer ONLY using tools. Cite as [title].
 
-    Answer in English. Be concise.
+    Answer in English.
     """
 
-    # state_modifier chỉ hoạt động trên langgraph bản mới
+    # state_modifier CHỈ HOẠT ĐỘNG trên langgraph >= 0.2.39
     app = create_react_agent(
         model=langchain_llm,
         tools=tools,
