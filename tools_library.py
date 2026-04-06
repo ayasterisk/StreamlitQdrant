@@ -23,7 +23,7 @@ def is_general_query(query: str):
 @tool(args_schema=QueryInput)
 def rewrite_query_tool(query: str) -> str:
     """
-    Rewrite query only if unclear.
+    Use rewrite_query_tool only when absolutely necessary, for example, when a clear entity cannot be found in the query.
     Return "ORIGINAL" if no rewrite needed.
     """
 
