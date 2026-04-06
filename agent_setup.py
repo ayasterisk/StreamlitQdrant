@@ -3,36 +3,33 @@ from langgraph.checkpoint.memory import InMemorySaver
 from tools_library import tools
 from core_utils import get_resources
 
-# Unpack 4 biến từ core_utils
+# Lấy resources (Unpack 4 biến theo core_utils của bạn)
 _, _, _, langchain_llm = get_resources()
 
-# Khởi tạo bộ nhớ Short-term cho Agent
-# InMemorySaver giúp agent "nhớ" lịch sử trong cùng một phiên làm việc (thread_id)
+# Bộ nhớ Short-term
 memory = InMemorySaver()
 
 def get_agent_app():
-    """Tạo Agent App dưới dạng Graph."""
-    
-    system_message = """You are a retrieval-only QA assistant using DeepSeek Reasoner.
+    # Prompt cho Agent
+    system_prompt = """You are a retrieval-only QA assistant using DeepSeek-Reasoner.
 
-    CRITICAL RULES:
-    1. TOOLS: You MUST call 'hybrid_search_tool' to get information before answering.
-    2. MEMORY: You can see previous chat history. If the user refers to past context, use 'rewrite_query_tool'.
-    3. SEARCH STRATEGY:
-       - For general questions (summary, list, overview): set top_k=15.
-       - For specific questions: set top_k=5.
-    4. NO HALLUCINATION: Only answer using information from the tools. If not found, say "I don't know based on the database."
-    5. CITATION: Use [title] for every claim.
+    RULES:
+    1. SEARCH: You MUST call 'hybrid_search_tool' for every question.
+    2. DYNAMIC LIMIT: 
+       - If the question is broad (summary, list all, overview), set top_k=15.
+       - If specific, set top_k=5.
+    3. REWRITE: Use 'rewrite_query_tool' if the user's question depends on chat history.
+    4. NO KNOWLEDGE: Answer ONLY based on retrieved docs. If not found, say you don't know.
+    5. CITATION: Use [title] for every fact.
 
-    Answer in English. Be precise and clear.
+    Language: English. Be concise.
     """
 
-    # create_react_agent tự động xử lý vòng lặp Tool-Calling
+    # Sửa từ state_modifier -> messages_modifier
     app = create_react_agent(
         model=langchain_llm,
         tools=tools,
-        state_modifier=system_message,
+        messages_modifier=system_prompt,
         checkpointer=memory
     )
-    
     return app
