@@ -57,6 +57,7 @@ def hybrid_search_tool(query: str) -> str:
     """
     Hybrid search using RRF (dense + sparse).
     MUST be used before answering.
+    If this tool is called again after hop2_expansion_tool, it is only allowed to run one more time and determine the answer.
     """
 
     if is_general_query(query):
@@ -122,6 +123,7 @@ def hybrid_search_tool(query: str) -> str:
 def hop2_expansion_tool(titles: List[str]) -> str:
     """
     Second-hop retrieval using titles.
+    Just use this tool 1 time if needed (skip if not).
     """
     titles = [t for t in titles if t and isinstance(t, str)]
 

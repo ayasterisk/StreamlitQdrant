@@ -38,13 +38,10 @@ III. REASONING PROCESS
     - ONLY if the query is unclear or ambiguous
     - If tool returns "ORIGINAL" → keep original query
 
-    2. ALWAYS call hybrid_search_tool
-
-    3. Check retrieved documents:
-    - If documents are insufficient OR missing entities → use hop2_expansion_tool
-    - Use titles from previous results as input
-
-    4. Combine information across documents to answer
+    2. Call hybrid_search_tool
+    3. Then call hop2_expansion_tool (if needed)
+    4. Carefully read ALL retrieved documents (including non-supporting ones) to gather evidence
+    5. Combine information across documents to answer
 
 IV. VALIDATION
     Before answering:
