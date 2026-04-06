@@ -1,35 +1,32 @@
 import streamlit as st
-from agent_setup import get_agent_app
-from langchain_core.messages import HumanMessage
 
-st.set_page_config(page_title="Functional RAG Agent", layout="wide")
+st.set_page_config(page_title="Multi-hop Agent", layout="wide")
 
-if "agent" not in st.session_state:
-    st.session_state.agent = get_agent_app()
+from agent_setup import get_agent_executor
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-st.title("🚀 DeepSeek Functional Agent")
+st.title("Multi-hop Agent")
 
-# Hiển thị hội thoại
-for m in st.session_state.messages:
-    st.chat_message(m["role"]).markdown(m["content"])
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg["content"])
 
-if prompt := st.chat_input():
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.chat_message("user").markdown(prompt)
+agent = get_agent_executor()
+
+if query := st.chat_input("Ask something..."):
+    st.session_state.messages.append({"role": "user", "content": query})
+    st.chat_message("user").write(query)
 
     with st.chat_message("assistant"):
-        # thread_id kích hoạt InMemorySaver (Short-term Memory)
-        config = {"configurable": {"thread_id": "user_unique_123"}}
-        
-        # Invoke cực kỳ đơn giản
-        result = st.session_state.agent.invoke(
-            {"messages": [HumanMessage(content=prompt)]}, 
-            config
-        )
-        
-        answer = result["messages"][-1].content
-        st.markdown(answer)
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+        response = agent.invoke({
+            "messages": st.session_state.messages
+        })
+
+        answer = response["messages"][-1].content
+        st.write(answer)
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer
+        })

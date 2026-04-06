@@ -1,44 +1,49 @@
-from langgraph.prebuilt import create_react_agent # Bản chất create_agent mới là wrapper cao cấp của cái này
+from langchain.agents import create_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain_core.messages import SystemMessage, RemoveMessage
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
-from tools_library import tools
 from core_utils import get_resources
+from tools_library import tools
 
-# 1. Lấy LLM từ tài nguyên (4 biến)
 _, _, _, langchain_llm = get_resources()
 
-# 2. Định nghĩa Middleware Trimming (Xử lý bộ nhớ ngắn hạn)
-def middleware_manager(state):
-    """
-    Tự động cắt tỉa hội thoại: Giữ System Prompt + 4 tin nhắn gần nhất.
-    Giúp DeepSeek không bị 'ngợp' bởi lịch sử quá dài.
-    """
-    messages = state["messages"]
-    if len(messages) <= 6:
-        return None # Không cần cắt
-    
-    # Giữ instruction đầu tiên và 4 context gần nhất
-    trimmed = [messages[0]] + messages[-4:]
-    
-    return {
-        "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)] + trimmed
-    }
+memory = InMemorySaver()
 
-# 3. Tạo Agent theo phong cách Khai báo (Declarative)
-# Gọn, nhẹ, đúng ý bạn: Model + Tools
-def get_agent_app():
-    system_instruction = """You are a retrieval-only assistant.
-    - Always call hybrid_search_tool.
-    - Use top_k=15 for broad topics, top_k=5 for specific facts.
-    - Answer ONLY from tools. Cite [title]."""
+def get_agent_executor():
 
-    # Đây là 'create_agent' phiên bản ổn định nhất hiện nay
-    agent = create_react_agent(
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a retrieval-only multi-hop QA assistant.
+
+        RULES:
+        - ONLY use retrieved documents
+        - NEVER use external knowledge
+
+        MEMORY:
+        - You can use chat history if needed
+        - Do not repeat previous answers
+
+        WORKFLOW:
+
+        1. If query unclear → call rewrite_query_tool
+        2. ALWAYS call hybrid_search_tool
+        3. If insufficient → call hop2_expansion_tool
+
+        FAIL:
+        - If no answer → say:
+        "I don't know based on the database."
+
+        FORMAT:
+        - Cite sources as [title]
+        - Be concise
+        """),
+
+        MessagesPlaceholder(variable_name="messages"),
+    ])
+
+    agent = create_agent(
         model=langchain_llm,
         tools=tools,
-        state_modifier=system_instruction, # Chèn System Prompt
-        checkpointer=InMemorySaver(),      # Tự động hóa Short-term Memory
-        # debug=True # Bật cái này nếu muốn xem nó gọi tool thế nào
+        prompt=prompt,
+        checkpointer=memory
     )
+
     return agent
