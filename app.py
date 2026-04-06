@@ -1,9 +1,8 @@
 import streamlit as st
-import uuid
-from agent_setup import get_agent_executor
-
 st.set_page_config(page_title="Multi-hop Agent", layout="wide")
 
+import uuid
+from agent_setup import get_agent_executor
 # =========================
 # 🔹 INIT SESSION
 # =========================
