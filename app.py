@@ -1,36 +1,35 @@
-import streamlit as st
-from agent_setup import get_agent_app
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import InMemorySaver
+from tools_library import tools
+from core_utils import get_resources
 
-# UI Setup
-st.set_page_config(page_title="DeepSeek RAG Agent", layout="wide")
+# SỬA LỖI TẠI ĐÂY: Unpack 4 biến
+_, _, _, langchain_llm = get_resources()
 
-st.title("Multi-hop RAG Agent")
+# Khởi tạo Short-term Memory
+memory = InMemorySaver()
 
-if "agent_app" not in st.session_state:
-    st.session_state.agent_app = get_agent_app()
+def get_agent_app():
+    # Prompt tối ưu cho Reasoning Model (DeepSeek)
+    system_message = """You are a strict retrieval-only QA assistant.
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    CORE RULES:
+    1. MEMORY: You can see previous messages. Use them with `rewrite_query_tool` if the current question refers to them (e.g. "tell me more about that").
+    2. SEARCH: Always call `hybrid_search_tool`. 
+       - If the user asks a broad/summary question, set `top_k=15`.
+       - For specific questions, set `top_k=5`.
+    3. FALLBACK: Use `hop2_expansion_tool` if you find titles but the text is missing details.
+    4. KNOWLEDGE: NEVER use your own knowledge. If it's not in the database, say you don't know.
+    5. CITATION: Cite every claim using [title].
 
-if prompt := st.chat_input("Ask me something..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    Answer in English. Be precise.
+    """
 
-    with st.chat_message("assistant"):
-        config = {"configurable": {"thread_id": "streamlit_session_1"}}
-        
-        input_data = {"messages": [("user", prompt)]}
-        
-        full_response = ""
-        placeholder = st.empty()
-        
-        result = st.session_state.agent_app.invoke(input_data, config)
-        
-        full_response = result["messages"][-1].content
-        placeholder.markdown(full_response)
-
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
+    # Tạo Agent App với LangGraph (Thay thế AgentExecutor)
+    app = create_react_agent(
+        model=langchain_llm,
+        tools=tools,
+        state_modifier=system_message,
+        checkpointer=memory
+    )
+    return app
