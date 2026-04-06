@@ -1,35 +1,46 @@
-from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import InMemorySaver
-from tools_library import tools
-from core_utils import get_resources
+import streamlit as st
+from agent_setup import get_agent_app
 
-# SỬA LỖI TẠI ĐÂY: Unpack 4 biến
-_, _, _, langchain_llm = get_resources()
+# --- UI Setup ---
+st.set_page_config(page_title="Multi-hop Agent", layout="wide")
+st.title("🤖 DeepSeek RAG Agent")
 
-# Khởi tạo Short-term Memory
-memory = InMemorySaver()
+# Khởi tạo Agent vào session_state (Load 1 lần duy nhất)
+if "agent_app" not in st.session_state:
+    with st.spinner("Initializing models and database..."):
+        st.session_state.agent_app = get_agent_app()
 
-def get_agent_app():
-    # Prompt tối ưu cho Reasoning Model (DeepSeek)
-    system_message = """You are a strict retrieval-only QA assistant.
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    CORE RULES:
-    1. MEMORY: You can see previous messages. Use them with `rewrite_query_tool` if the current question refers to them (e.g. "tell me more about that").
-    2. SEARCH: Always call `hybrid_search_tool`. 
-       - If the user asks a broad/summary question, set `top_k=15`.
-       - For specific questions, set `top_k=5`.
-    3. FALLBACK: Use `hop2_expansion_tool` if you find titles but the text is missing details.
-    4. KNOWLEDGE: NEVER use your own knowledge. If it's not in the database, say you don't know.
-    5. CITATION: Cite every claim using [title].
+# Hiển thị lịch sử chat
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-    Answer in English. Be precise.
-    """
+# Xử lý chat input
+if prompt := st.chat_input("Ask about HotpotQA data..."):
+    # 1. Hiển thị tin nhắn người dùng
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-    # Tạo Agent App với LangGraph (Thay thế AgentExecutor)
-    app = create_react_agent(
-        model=langchain_llm,
-        tools=tools,
-        state_modifier=system_message,
-        checkpointer=memory
-    )
-    return app
+    # 2. Assistant trả lời
+    with st.chat_message("assistant"):
+        # Định nghĩa thread_id (để duy trì Short-term Memory)
+        config = {"configurable": {"thread_id": "session_user_1"}}
+        
+        # Chạy Agent qua LangGraph
+        input_data = {"messages": [("user", prompt)]}
+        
+        # Chạy và lấy kết quả cuối cùng
+        # Bạn có thể dùng .stream() nếu muốn hiển thị quá trình suy luận
+        result = st.session_state.agent_app.invoke(input_data, config)
+        
+        # Phản hồi cuối cùng nằm ở tin nhắn cuối của mảng 'messages'
+        full_response = result["messages"][-1].content
+        
+        st.markdown(full_response)
+        
+        # Lưu vào lịch sử
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
