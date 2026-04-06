@@ -15,7 +15,7 @@ class RewriteInput(BaseModel):
     query: str = Field(description="The original user query to rewrite.")
 
 class HybridSearchInput(BaseModel):
-    query_text: str = Field(description="The refined search query.")
+    query_text: str = Field(description="The search query.")
     top_k: int = Field(default=5, description="Number of documents to retrieve. Use 10-15 for broad/general questions, 5 for specific ones.")
 
 class Hop2Input(BaseModel):
@@ -51,10 +51,7 @@ def rewrite_query_tool(query: str) -> str:
 
 @tool("hybrid_search_tool", args_schema=HybridSearchInput)
 def hybrid_search_tool(query_text: str, top_k: int = 5) -> str:
-    """
-    MANDATORY: Search information from Qdrant database.
-    Use higher top_k for general/summary questions.
-    """
+    """Search information in the Qdrant database."""
     query_dense = list(dense_model.embed([query_text]))[0].tolist()
     query_sparse_raw = list(sparse_model.embed([query_text]))[0]
     query_sparse = models.SparseVector(
@@ -62,29 +59,24 @@ def hybrid_search_tool(query_text: str, top_k: int = 5) -> str:
         values=query_sparse_raw.values.tolist()
     )
 
-    # Thiết lập prefetch gấp 3 lần limit để RRF có đủ mẫu để xếp hạng
-    prefetch_limit = max(top_k * 3, 20)
+    prefetch_val = max(top_k * 2, 20)
 
     points = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=[
-            models.Prefetch(query=query_dense, using="dense", limit=prefetch_limit),
-            models.Prefetch(query=query_sparse, using="sparse", limit=prefetch_limit),
+            models.Prefetch(query=query_dense, using="dense", limit=prefetch_val),
+            models.Prefetch(query=query_sparse, using="sparse", limit=prefetch_val),
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),
         limit=top_k
     ).points
 
-    if not points:
-        return json.dumps({"source": "qdrant", "documents": []})
-
     results = [{
         "title": p.payload.get("title"),
-        "text": p.payload.get("text"),
-        "is_supporting": p.payload.get("is_supporting", False)
+        "text": p.payload.get("text")
     } for p in points]
 
-    return json.dumps({"source": "qdrant", "documents": results}, indent=2)
+    return json.dumps({"documents": results}, indent=2)
 
 
 @tool("hop2_expansion_tool", args_schema=Hop2Input)
