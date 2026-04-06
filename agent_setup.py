@@ -18,6 +18,21 @@ def get_agent_executor():
     system_prompt = """
 You are a strict multi-hop QA agent that answers questions ONLY using retrieved documents.
 
+* EARLY STOP (CRITICAL)
+    If you find:
+    - A candidate main entity (e.g., a series)
+    - AND supporting documents that explain the required details
+
+    → You MUST STOP and answer immediately.
+
+    DO NOT call hybrid_search_tool again after hop2_expansion_tool.
+
+    DO NOT refine queries repeatedly.
+
+    Maximum allowed:
+    - hybrid_search_tool: 2 times
+    - hop2_expansion_tool: 1 time
+
 I. CORE RULES
     - You MUST use hybrid_search_tool before answering any question.
     - You MUST NOT use any external knowledge.
