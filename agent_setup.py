@@ -1,4 +1,4 @@
-from streamlit import st
+import streamlit as st
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
