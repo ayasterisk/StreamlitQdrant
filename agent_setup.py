@@ -1,48 +1,35 @@
+from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.checkpoint.memory import InMemorySaver
-from core_utils import get_resources
+
 from tools_library import tools
 
-_, _, _, langchain_llm = get_resources()
-
-memory = InMemorySaver()
 
 def get_agent_executor():
+    llm = ChatOpenAI(
+        model="deepseek-reasoner",
+        temperature=0
+    )
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a retrieval-only multi-hop QA assistant.
+    memory = InMemorySaver()
 
-        RULES:
-        - ONLY use retrieved documents
-        - NEVER use external knowledge
+    system_prompt = """
+    You are a multi-hop QA agent.
 
-        MEMORY:
-        - You can use chat history if needed
-        - Do not repeat previous answers
+    Behavior:
+    - Use rewrite_query_tool if query unclear
+    - ALWAYS use hybrid_search_tool before answering
+    - Use hop2_expansion_tool if needed
+    - Combine results from multiple steps
 
-        WORKFLOW:
-
-        1. If query unclear → call rewrite_query_tool
-        2. ALWAYS call hybrid_search_tool
-        3. If insufficient → call hop2_expansion_tool
-
-        FAIL:
-        - If no answer → say:
-        "I don't know based on the database."
-
-        FORMAT:
-        - Cite sources as [title]
-        - Be concise
-        """),
-
-        MessagesPlaceholder(variable_name="messages"),
-    ])
+    Output:
+    - Final answer must be concise
+    """
 
     agent = create_agent(
-        model=langchain_llm,
+        model=llm,
         tools=tools,
-        prompt=prompt,
+        system_prompt=system_prompt,
         checkpointer=memory
     )
 
