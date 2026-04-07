@@ -35,7 +35,7 @@ if query := st.chat_input("Ask something..."):
     with st.chat_message("assistant"):
         placeholder = st.empty()
         with placeholder.container():
-            st.markdown("⏳ Thinking...")
+            st.markdown("Thinking...")
             with st.spinner("Processing..."):
                 response = agent.invoke(
                     {

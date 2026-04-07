@@ -21,38 +21,6 @@ def is_general_query(query: str):
     return len(query.split()) > 12
 
 @tool(args_schema=QueryInput)
-def rewrite_query_tool(query: str) -> str:
-    """
-    Use rewrite_query_tool only when absolutely necessary, for example, when a clear entity cannot be found in the query.
-    Return "ORIGINAL" if no rewrite needed.
-    """
-
-    if len(query.split()) > 8 and not is_complex_query(query):
-        return "ORIGINAL"
-
-    prompt = f"""
-Rewrite the following question into a clear standalone query.
-
-Question: {query}
-
-Rules:
-- If already clear → return EXACTLY "ORIGINAL"
-- Do NOT add explanation
-"""
-
-    try:
-        response = raw_llm.invoke(prompt)
-        result = response.content.strip()
-
-        if "ORIGINAL" in result.upper():
-            return "ORIGINAL"
-
-        return result
-
-    except Exception:
-        return "ORIGINAL"
-
-@tool(args_schema=QueryInput)
 def hybrid_search_tool(query: str) -> str:
     """
     Hybrid search using RRF (dense + sparse).
@@ -135,7 +103,6 @@ def hop2_expansion_tool(titles: List[str]) -> str:
     return hybrid_search_tool.invoke({"query": query})
 
 tools = [
-    rewrite_query_tool,
     hybrid_search_tool,
     hop2_expansion_tool
 ]
