@@ -1,9 +1,10 @@
 import streamlit as st
+
+st.set_page_config(page_title="Multi-hop Agent", layout="wide")
+
 import uuid
 from agent_setup import get_agent_executor
 from langchain_core.messages import AIMessage
-
-st.set_page_config(page_title="Multi-hop Agent", layout="wide")
 
 st.title("Multi-hop Agent")
 
