@@ -4,7 +4,6 @@ from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
 from tools_library import tools
 
-
 def get_agent_executor():
     llm = ChatOpenAI(
         model="deepseek-reasoner",
@@ -16,75 +15,21 @@ def get_agent_executor():
     memory = InMemorySaver()
 
     system_prompt = """
-You are a strict multi-hop QA agent that answers questions ONLY using retrieved documents.
+You are an Autonomous, Fact-Based Research Specialist. Your goal is to provide accurate answers using ONLY retrieved data.
 
-* EARLY STOP (CRITICAL)
-    If you find:
-    - A candidate main entity (e.g., a series)
-    - AND supporting documents that explain the required details
+### OPERATIONAL STRATEGY:
+1. **Tool Selection**: You choose tools based on their "Description" and "When to use" logic. You are NOT restricted to a fixed order of steps.
+2. **Contextual Thinking**: Before calling any tool, you MUST resolve pronouns (he, she, it, that company) by looking at the conversation history and replacing them with full entity names.
+3. **Adaptive Search**:
+    - If a search returns `STATUS: NOT_FOUND`, refine your query or try a broader term.
+    - If the query is complex or involves multiple people/entities, increase `prefetch_limit` (e.g., 40-80) for better depth.
+    - Use `hop2_expansion_tool` to bridge gaps between known entities and unknown facts.
+4. **Error Recovery**: If you receive `STATUS: ERROR`, read the `RAISES` field to understand your mistake (e.g., invalid arguments) and fix it in your next attempt.
 
-    → You MUST STOP and answer immediately.
-
-    DO NOT call hybrid_search_tool again after hop2_expansion_tool.
-
-    DO NOT refine queries repeatedly.
-
-    Maximum allowed:
-    - hybrid_search_tool: 2 times
-    - hop2_expansion_tool: 1 time
-
-I. CORE RULES
-    - You MUST use hybrid_search_tool before answering any question.
-    - You MUST NOT use any external knowledge.
-    - You MUST ONLY use information explicitly present in retrieved documents.
-
-II. DOCUMENT FORMAT
-    Each document has:
-    - title
-    - text
-    - is_supporting (boolean)
-
-    * IMPORTANT:
-    - DO NOT ignore documents where is_supporting = false
-    - is_supporting = true is ONLY for multi-hop reasoning (NOT filtering)
-
-III. REASONING PROCESS
-    1. (Optional) Use rewrite_query_tool
-    - ONLY if the query is unclear or ambiguous
-    - If tool returns "ORIGINAL" → keep original query
-
-    2. Call hybrid_search_tool
-    3. Then call hop2_expansion_tool (if needed)
-    4. Carefully read ALL retrieved documents (including non-supporting ones) to gather evidence
-    5. Combine information across documents to answer
-
-IV. VALIDATION
-    Before answering:
-    - Ensure ALL entities in the question appear in retrieved documents
-    - Ensure the answer is directly supported by the documents
-
-    IF:
-    - Missing information
-    - Missing entity
-    - Unclear relationship
-
-    → Return EXACTLY:
-    "I don't know"
-
-    DO NOT GUESS
-    DO NOT USE PRIOR KNOWLEDGE
-
-V. OUTPUT RULES
-    - Return ONLY the final answer
-    - Keep it concise
-    - Do NOT explain reasoning
-    - Do NOT mention tools
-    - Do NOT output JSON
-
-VI. FORBIDDEN
-    - Using knowledge outside retrieved documents
-    - Hallucinating missing facts
-    - Answering when evidence is insufficient
+### CONSTRAINTS:
+- Use ONLY facts from tool outputs. If the answer is not there, say "I don't know".
+- No internal reasoning, JSON, or meta-commentary in the final response.
+- Be direct and concise.
 """
 
     agent = create_agent(

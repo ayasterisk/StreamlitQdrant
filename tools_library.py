@@ -1,141 +1,129 @@
 from langchain.tools import tool
 from pydantic import BaseModel, Field
-import json
-from typing import List
+from typing import List, Optional
 from core_utils import get_resources, COLLECTION_NAME
 from qdrant_client import models
 
 client, dense_model, sparse_model, raw_llm = get_resources()
 
-class QueryInput(BaseModel):
-    query: str = Field(..., description="User question")
 
-class TitlesInput(BaseModel):
-    titles: List[str] = Field(..., description="List of document titles")
-
-def is_complex_query(query: str):
-    keywords = ["and", "or", "compare", "relationship", "difference", "both"]
-    return any(k in query.lower() for k in keywords)
-
-def is_general_query(query: str):
-    return len(query.split()) > 12
-
-@tool(args_schema=QueryInput)
-def rewrite_query_tool(query: str) -> str:
-    """
-    Use rewrite_query_tool only when absolutely necessary, for example, when a clear entity cannot be found in the query.
-    Return "ORIGINAL" if no rewrite needed.
-    """
-
-    if len(query.split()) > 8 and not is_complex_query(query):
-        return "ORIGINAL"
-
-    prompt = f"""
-Rewrite the following question into a clear standalone query.
-
-Question: {query}
-
-Rules:
-- If already clear → return EXACTLY "ORIGINAL"
-- Do NOT add explanation
-"""
-
-    try:
-        response = raw_llm.invoke(prompt)
-        result = response.content.strip()
-
-        if "ORIGINAL" in result.upper():
-            return "ORIGINAL"
-
-        return result
-
-    except Exception:
-        return "ORIGINAL"
-
-@tool(args_schema=QueryInput)
-def hybrid_search_tool(query: str) -> str:
-    """
-    Hybrid search using RRF (dense + sparse).
-    MUST be used before answering.
-    If this tool is called again after hop2_expansion_tool, it is only allowed to run one more time and determine the answer.
-    """
-
-    if is_general_query(query):
-        prefetch_limit = 40
-        final_limit = 10
-    elif is_complex_query(query):
-        prefetch_limit = 25
-        final_limit = 8
-    else:
-        prefetch_limit = 12
-        final_limit = 5
-
-    query_dense = list(dense_model.embed([query]))[0]
-
-    sparse_raw = list(sparse_model.embed([query]))[0]
-    query_sparse = models.SparseVector(
-        indices=sparse_raw.indices.tolist(),
-        values=sparse_raw.values.tolist()
+class SearchInput(BaseModel):
+    query: str = Field(
+        ..., 
+        description="The standalone search query. You MUST resolve all pronouns (he, it, that company) to specific names before calling this."
+    )
+    prefetch_limit: int = Field(
+        default=20, 
+        description="Number of candidates to fetch from each index. Use 40-60 for complex, multi-entity queries."
+    )
+    final_limit: int = Field(
+        default=5, 
+        description="The maximum number of top documents to return. Increase if the answer requires broad context."
     )
 
+class ExpansionInput(BaseModel):
+    follow_up_query: str = Field(
+        ..., 
+        description="A specific question to find missing details or attributes of a lead found in previous searches."
+    )
+    target_entities: List[str] = Field(
+        ..., 
+        description="A list of document titles or entity names identified in the first search to anchor the context."
+    )
+
+
+def is_complex_or_long(query: str) -> bool:
+    """Helper to detect if a query needs more search depth."""
+    keywords = ["and", "compare", "relationship", "difference", "between", "both"]
+    return len(query.split()) > 12 or any(k in query.lower() for k in keywords)
+
+def format_output(status: str, content: str, error_msg: Optional[str] = None) -> str:
+    """Standardizes tool output for the agent's reasoning engine."""
+    output = f"STATUS: {status}\n"
+    if error_msg:
+        output += f"RAISES: {error_msg}\n"
+    output += f"CONTENT: {content}"
+    return output
+
+
+@tool(args_schema=SearchInput)
+def hybrid_search_tool(query: str, prefetch_limit: int = 20, final_limit: int = 5) -> str:
+    """
+    Description:
+        The primary fact-finding tool. Performs a hybrid search (Dense + Sparse) in the knowledge base.
+        Use this for initial discovery or when you need general information about a topic.
+    
+    Args:
+        query (str): The search query. Must be explicit (no pronouns).
+        prefetch_limit (int): Candidates per index before fusion. Higher values improve recall for hard queries.
+        final_limit (int): Number of documents returned to you.
+    
+    Returns:
+        str: A structured string with STATUS (SUCCESS/NOT_FOUND/ERROR) and the document CONTENT.
+    
+    Raises:
+        ValueError: If the query is empty.
+        RuntimeError: If the search engine fails.
+    """
+    if not query.strip():
+        return format_output("ERROR", "Query cannot be empty.", "ValueError")
+
+    actual_pre = prefetch_limit
+    actual_fin = final_limit
+    if prefetch_limit == 20 and final_limit == 5 and is_complex_or_long(query):
+        actual_pre, actual_fin = 40, 10
+
     try:
+        query_dense = list(dense_model.embed([query]))[0]
+        sparse_raw = list(sparse_model.embed([query]))[0]
+        query_sparse = models.SparseVector(
+            indices=sparse_raw.indices.tolist(),
+            values=sparse_raw.values.tolist()
+        )
+
         response = client.query_points(
             collection_name=COLLECTION_NAME,
             prefetch=[
-                models.Prefetch(query=query_dense, using="dense", limit=prefetch_limit),
-                models.Prefetch(query=query_sparse, using="sparse", limit=prefetch_limit),
+                models.Prefetch(query=query_dense, using="dense", limit=actual_pre),
+                models.Prefetch(query=query_sparse, using="sparse", limit=actual_pre),
             ],
             query=models.FusionQuery(fusion=models.Fusion.RRF),
-            limit=final_limit
+            limit=actual_fin
         )
 
-        points = response.points
+        if not response.points:
+            return format_output("NOT_FOUND", "No documents matched the query.")
 
-    except Exception:
-        return json.dumps({"documents": []})
+        docs = []
+        for p in response.points:
+            payload = p.payload or {}
+            docs.append(f"Title: {payload.get('title')}\nText: {payload.get('text')}")
+        
+        return format_output("SUCCESS", "\n\n".join(docs))
 
-    if not points:
-        return json.dumps({"documents": []})
+    except Exception as e:
+        return format_output("ERROR", "Search failed.", f"RuntimeError: {str(e)}")
 
-    seen = set()
-    results = []
-
-    for p in points:
-        payload = p.payload or {}
-
-        text = payload.get("text", "")
-        title = payload.get("title", "")
-
-        if not text or text in seen:
-            continue
-
-        seen.add(text)
-
-        results.append({
-            "title": title,
-            "text": text[:500],
-            "is_supporting": payload.get("is_supporting", False)
-        })
-
-    return json.dumps({"documents": results}, indent=2)
-
-@tool(args_schema=TitlesInput)
-def hop2_expansion_tool(titles: List[str]) -> str:
+@tool(args_schema=ExpansionInput)
+def hop2_expansion_tool(follow_up_query: str, target_entities: List[str]) -> str:
     """
-    Second-hop retrieval using titles.
-    Just use this tool 1 time if needed (skip if not).
+    Description:
+        A precision tool for 'multi-hop' reasoning. Use this to bridge a lead found in an 
+        initial search to a specific missing attribute (e.g., finding the spouse of an actor found in step 1).
+    
+    Args:
+        follow_up_query (str): The specific question to resolve the gap.
+        target_entities (List[str]): List of titles/entities from previous results to anchor the search.
+    
+    Returns:
+        str: Targeted document content.
     """
-    titles = [t for t in titles if t and isinstance(t, str)]
+    if not target_entities:
+        return hybrid_search_tool.invoke({"query": follow_up_query})
+    
+    context = " and ".join(target_entities)
+    refined_query = f"{follow_up_query} regarding {context}"
+    
+    return hybrid_search_tool.invoke({"query": refined_query, "prefetch_limit": 30})
 
-    if not titles:
-        return json.dumps({"documents": []})
-
-    query = " ; ".join(titles)
-
-    return hybrid_search_tool.invoke({"query": query})
-
-tools = [
-    rewrite_query_tool,
-    hybrid_search_tool,
-    hop2_expansion_tool
-]
+tools = [hybrid_search_tool, hop2_expansion_tool]
