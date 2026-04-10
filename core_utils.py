@@ -22,8 +22,8 @@ def get_resources():
     dense_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
     sparse_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
 
-    ds_api_key = str(st.secrets["DEEPSEEK_API_KEY"]).strip()
-    ds_base_url = "https://api.deepseek.com/v1"
+    # ds_api_key = str(st.secrets["DEEPSEEK_API_KEY"]).strip()
+    # ds_base_url = "https://api.deepseek.com/v1"
 
     # langchain_llm = ChatOpenAI(
     #     model='deepseek-chat',
@@ -33,11 +33,13 @@ def get_resources():
     #     temperature=0,
     #     streaming=True
     # )
+    gemini_api_key = str(st.secrets["GEMINI_API_KEY"]).strip()
     
     langchain_llm = ChatGoogleGenerativeAI(
-    model="gemini-3-flash-preview",
-    google_api_key=str(st.secrets.get("GEMINI_API_KEY", "")).strip(),
+    model="gemini-3.1-flash-lite-preview",
+    google_api_key=gemini_api_key,
     temperature=0,
+    max_retries=3
     )
 
     return client, dense_model, sparse_model, langchain_llm
