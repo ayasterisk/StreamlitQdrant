@@ -6,7 +6,6 @@ from qdrant_client import models
 
 client, dense_model, sparse_model, _ = get_resources()
 
-# --- INPUT SCHEMAS ---
 
 class SearchInput(BaseModel):
     query: str = Field(..., description="Standalone search query. Explicitly resolve all pronouns (he, she, it, that company) before calling.")
@@ -17,7 +16,6 @@ class ExpansionInput(BaseModel):
     follow_up_query: str = Field(..., description="Targeted question to find missing attributes of a known entity.")
     target_entities: List[str] = Field(..., description="Exact Titles/Names from previous search results to focus the search context.")
 
-# --- TOOLS ---
 
 @tool(args_schema=SearchInput)
 def hybrid_search_tool(query: str, prefetch_limit: int = 20, final_limit: int = 5) -> str:

@@ -4,6 +4,8 @@ from qdrant_client import QdrantClient
 from fastembed import TextEmbedding, SparseTextEmbedding
 from langchain_openai import ChatOpenAI
 
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 COLLECTION_NAME = "hotpot_qa"
 
 @st.cache_resource
@@ -23,13 +25,19 @@ def get_resources():
     ds_api_key = str(st.secrets["DEEPSEEK_API_KEY"]).strip()
     ds_base_url = "https://api.deepseek.com/v1"
 
-    langchain_llm = ChatOpenAI(
-        model='deepseek-chat',
-        openai_api_key=ds_api_key,
-        openai_api_base=ds_base_url,
-        max_retries=3,
-        temperature=0,
-        streaming=True
+    # langchain_llm = ChatOpenAI(
+    #     model='deepseek-chat',
+    #     openai_api_key=ds_api_key,
+    #     openai_api_base=ds_base_url,
+    #     max_retries=3,
+    #     temperature=0,
+    #     streaming=True
+    # )
+    
+    langchain_llm = ChatGoogleGenerativeAI(
+    model="gemini-2.0-flash-lite",
+    google_api_key=str(st.secrets.get("GEMINI_API_KEY", "")).strip(),
+    temperature=0,
     )
 
     return client, dense_model, sparse_model, langchain_llm
