@@ -35,7 +35,7 @@ def get_resources():
     # )
     
     langchain_llm = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash-lite",
+    model="gemini-3-flash-preview",
     google_api_key=str(st.secrets.get("GEMINI_API_KEY", "")).strip(),
     temperature=0,
     )
