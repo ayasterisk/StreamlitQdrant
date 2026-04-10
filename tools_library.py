@@ -8,12 +8,12 @@ client, dense_model, sparse_model, raw_llm = get_resources()
 
 class SearchInput(BaseModel):
     query: str = Field(..., description="The standalone search query. You MUST resolve all pronouns (he, it, that company) to specific names before calling this.")
-    prefetch_limit: int = Field(default=20, description="Number of candidates to fetch from each index. Use 40-60 for complex, multi-entity queries.")
-    final_limit: int = Field(default=5, description="The maximum number of top documents to return. Increase if the answer requires broad context.")
+    prefetch_limit: int = Field(default=20, description="Number of candidates per index.")
+    final_limit: int = Field(default=5, description="The maximum number of top documents to return.")
 
 class ExpansionInput(BaseModel):
-    follow_up_query: str = Field(..., description="A specific question to find missing details or attributes of a lead found in previous searches.")
-    target_entities: List[str] = Field(..., description="A list of document titles or entity names identified in the first search to anchor the context.")
+    follow_up_query: str = Field(..., description="A specific question to find missing details or attributes.")
+    target_entities: List[str] = Field(..., description="A list of document titles or entity names identified previously.")
 
 def is_complex_or_long(query: str) -> bool:
     keywords = ["and", "compare", "relationship", "difference", "between", "both"]
@@ -28,6 +28,10 @@ def format_output(status: str, content: str, error_msg: Optional[str] = None) ->
 
 @tool(args_schema=SearchInput)
 def hybrid_search_tool(query: str, prefetch_limit: int = 20, final_limit: int = 5) -> str:
+    """
+    Perform a hybrid search (Dense + Sparse) in the knowledge base.
+    This is the primary tool for initial discovery.
+    """
     if not query.strip():
         return format_output("ERROR", "Query cannot be empty.", "ValueError")
 
@@ -63,6 +67,7 @@ def hybrid_search_tool(query: str, prefetch_limit: int = 20, final_limit: int = 
             title = payload.get('title', 'N/A')
             text = payload.get('text', '')
             
+            # Cắt tỉa văn bản thô thành snippet 400 ký tự để nhẹ Trace
             snippet = (text[:400] + "...") if len(text) > 400 else text
             docs.append(f"Title: {title}\nSnippet: {snippet}")
         
@@ -73,6 +78,9 @@ def hybrid_search_tool(query: str, prefetch_limit: int = 20, final_limit: int = 
 
 @tool(args_schema=ExpansionInput)
 def hop2_expansion_tool(follow_up_query: str, target_entities: List[str]) -> str:
+    """
+    A precision tool for 'multi-hop' reasoning to bridge gaps between entities.
+    """
     if not target_entities:
         return hybrid_search_tool.invoke({"query": follow_up_query})
     
