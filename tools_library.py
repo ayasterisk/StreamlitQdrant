@@ -62,7 +62,7 @@ def hybrid_search_tool(query: str, prefetch_limit: int = 20, final_limit: int = 
 
 @tool(args_schema=ExpansionInput)
 def hop2_expansion_tool(follow_up_query: str, target_entities: List[str]) -> str:
-    """Bridge gaps between entities found in previous steps."""
+    """Bridge gaps between entities found in previous steps. Just use this tool only once to expand."""
     context = " and ".join(target_entities)
     return hybrid_search_tool.invoke({"query": f"{follow_up_query} regarding {context}", "prefetch_limit": 30})
 
