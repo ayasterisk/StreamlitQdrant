@@ -4,6 +4,8 @@ from qdrant_client import QdrantClient
 from fastembed import TextEmbedding, SparseTextEmbedding
 from langchain_openai import ChatOpenAI
 
+COLLECTION_NAME = "hotpot_qa"
+
 @st.cache_resource
 def get_resources():
     os.environ["LANGCHAIN_TRACING_V2"] = "true" if st.secrets.get("LANGCHAIN_TRACING_V2") else "false"
@@ -19,16 +21,15 @@ def get_resources():
     sparse_model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
 
     ds_api_key = str(st.secrets["DEEPSEEK_API_KEY"]).strip()
-    ds_base_url = "https://api.deepseek.com"
+    ds_base_url = "https://api.deepseek.com/v1"
 
     langchain_llm = ChatOpenAI(
-        model='deepseek-reasoner', 
+        model='deepseek-chat',
         openai_api_key=ds_api_key,
         openai_api_base=ds_base_url,
         max_retries=3,
+        temperature=0,
         streaming=True
     )
-    
-    return client, dense_model, sparse_model, langchain_llm
 
-COLLECTION_NAME = "hotpot_qa"
+    return client, dense_model, sparse_model, langchain_llm
